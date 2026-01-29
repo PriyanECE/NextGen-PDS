@@ -371,7 +371,7 @@ const ScanDispense = () => {
                                 <div className="absolute inset-0 border-[24px] border-white/10 rounded-3xl pointer-events-none"></div>
                                 {!isScanning && (
                                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 text-white">
-                                        <button onClick={startScanner} className="px-8 py-4 bg-indigo-600 rounded-full font-bold shadow-lg hover:scale-105 transition-transform flex items-center gap-2">
+                                        <button id="btn-start-scan" onClick={startScanner} className="px-8 py-4 bg-indigo-600 rounded-full font-bold shadow-lg hover:scale-105 transition-transform flex items-center gap-2">
                                             <Camera /> Start Scanner
                                         </button>
                                         <div className="mt-8 flex gap-2">
@@ -382,7 +382,7 @@ const ScanDispense = () => {
                                 )}
                                 {isScanning && (
                                     <>
-                                        <button onClick={stopScanner} className="absolute bottom-6 left-1/2 -translate-x-1/2 px-6 py-2 bg-red-500/80 text-white rounded-full text-sm backdrop-blur-sm">Stop Camera</button>
+                                        <button id="btn-stop-scan" onClick={stopScanner} className="absolute bottom-6 left-1/2 -translate-x-1/2 px-6 py-2 bg-red-500/80 text-white rounded-full text-sm backdrop-blur-sm">Stop Camera</button>
                                     </>
                                 )}
 
@@ -562,7 +562,7 @@ const ScanDispense = () => {
                                     <p className="text-slate-400 text-sm mb-1">Total Payable Amount</p>
                                     <p className="text-3xl font-bold">₹ {(rationDetails.cost || 0).toFixed(2)}</p>
                                 </div>
-                                <button onClick={startFaceAuth} className="px-6 py-3 bg-indigo-500 hover:bg-indigo-400 text-white rounded-xl font-bold shadow-lg shadow-indigo-500/30 transition-all flex items-center gap-2">
+                                <button id="btn-verify-pay" onClick={startFaceAuth} className="px-6 py-3 bg-indigo-500 hover:bg-indigo-400 text-white rounded-xl font-bold shadow-lg shadow-indigo-500/30 transition-all flex items-center gap-2">
                                     <ShieldCheck size={20} /> Verify & Pay
                                 </button>
                             </div>
@@ -578,6 +578,7 @@ const ScanDispense = () => {
 
                             <div className="flex gap-4 mb-8">
                                 <button
+                                    id="btn-pay-cash"
                                     onClick={() => setPaymentMode('Cash')}
                                     className={`flex-1 py-4 rounded-2xl border-2 font-bold flex flex-col items-center gap-2 transition-all ${paymentMode === 'Cash' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-100 text-slate-400'}`}
                                 >
@@ -607,6 +608,7 @@ const ScanDispense = () => {
                             )}
 
                             <button
+                                id="btn-confirm-dispense"
                                 onClick={handleDispense}
                                 disabled={dispensing}
                                 className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-lg shadow-emerald-500/30 flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"

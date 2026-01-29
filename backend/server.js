@@ -6,6 +6,7 @@ const fs = require('fs'); // Ensure fs is required here
 const { spawn } = require('child_process');
 require('dotenv').config();
 const bcrypt = require('bcryptjs');
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -1043,6 +1044,152 @@ app.get('/api/reports', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+// --- AI ASSISTANT ---
+app.post('/api/ai/chat', async (req, res) => {
+    try {
+        const { message, language = 'en-US', role = 'employee' } = req.body;
 
+        // 1. Gather Context
+        const inventory = await Inventory.findOne({ type: 'daily_stock' });
+        const shopCount = await Shop.countDocuments();
+        const pendingRequests = await BeneficiaryRequest.countDocuments({ status: 'Pending' });
+
+        const context = {
+            inventory: inventory ? {
+                rice: inventory.rice.total - inventory.rice.dispensed,
+                dhal: inventory.dhal.total - inventory.dhal.dispensed
+            } : { rice: 0, dhal: 0 },
+            shops: shopCount,
+            pending: pendingRequests
+        };
+
+        // 2. AI Logic (Gemini)
+        if (process.env.GEMINI_API_KEY) {
+            const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+            const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+
+            const prompt = `
+            You are the specialized AI Assistant for the "Smart PDS" (Public Distribution System) website.
+
+            [USER CONTEXT]
+            - Role: ${role} (Strictly enforce permissions based on this)
+
+            [SYSTEM CONTEXT]
+            - Rice Stock: ${context.inventory.rice} kg
+            - Dhal/Sugar Stock: ${context.inventory.dhal} kg
+            - Active Shops: ${context.shops}
+            - Pending Requests: ${context.pending}
+            - Date: ${new Date().toDateString()}
+
+            [KNOWLEDGE BASE - ROUTE MAPPING]
+            Understand that these keywords map to specific routes:
+            1. /admin ("Admin Dashboard")
+               - Keywords: Stock, Inventory, Total Sales, Reports, Graphs, Analytics, Employee Management, Shop Network.
+               - Access: ADMIN ONLY.
+            
+            2. /scan ("Scanner / Dispenser")
+               - Keywords: Scan QR, Sell Rice, Dispense Ration, Verify Beneficiary, Face Auth, Weighing, Bill.
+               - Used for: Distributing ration to people.
+            
+            3. /add-beneficiary ("Registration")
+               - Keywords: Add Member, New Card, Enroll, Register, Create User.
+            
+            4. /history ("Transaction History")
+               - Keywords: Past transactions, Sales Log, My History, Last Bill.
+            
+            5. /home ("Main Menu")
+               - Keywords: Home, Dashboard, Start, Menu.
+            
+            6. /help ("Voice Guide")
+               - Keywords: Commands, Help, What can you do, Instructions.
+
+            [ACCESS CONTROL RULES]
+            - If role is 'employee' or 'user': THEY CANNOT ACCESS /admin.
+            - If an employee asks for "Stock" or "Reports" (which are on /admin), DO NOT navigate. Instead, reply: "Access Denied. You need Admin privileges."
+            
+            - If role is 'admin': THEY CANNOT ACCESS /scan, /add-beneficiary.
+            - If an admin asks for "Open Scanner" or "Dispense", reply: "This feature is for Shop Employees only."
+
+            - Employees CAN access: /scan, /history, /home, /add-beneficiary, /help.
+            - Admins CAN access: /admin, /history, /home, /help.
+
+            [INSTRUCTIONS]
+            - Answer in ${language} (concise, max 2 sentences).
+            - Output valid JSON if a Clear Action is detected.
+            - Otherwise, output plain text response.
+
+            [RESPONSE FORMATS]
+            1. NAVIGATION: {"action": "NAVIGATION", "target": "/route_or_BACK"}
+            2. CHAT: {"text": "Your answer here"}
+
+            User Query: "${message}"
+            `;
+
+            const result = await model.generateContent(prompt);
+            const response = await result.response;
+            const text = response.text();
+
+            // Try parsing JSON actions
+            try {
+                const cleaned = text.replace(/```json|```/g, '').trim();
+                if (cleaned.startsWith('{')) {
+                    const jsonAction = JSON.parse(cleaned);
+                    return res.json(jsonAction);
+                }
+            } catch (e) {
+                // Not JSON, just text
+            }
+
+            return res.json({ text: text });
+        }
+
+        // 3. Fallback Logic (Keyword Matching) if no AI Key or Error
+        const lower = message.toLowerCase();
+
+        // FAILSAFE NAVIGATION (Works without AI)
+        if (lower.includes('back') || lower.includes('return') || lower.includes('previous')) {
+            return res.json({ action: "NAVIGATION", target: "BACK" });
+        }
+        if (lower.includes('history') || lower.includes('report') || lower.includes('transactions')) {
+            return res.json({ action: "NAVIGATION", target: "/history" });
+        }
+        if (lower.includes('scan') || lower.includes('qr') || lower.includes('camera')) {
+            return res.json({ action: "NAVIGATION", target: "/scan" });
+        }
+        if (lower.includes('payment') || lower.includes('pay')) {
+            return res.json({ action: "NAVIGATION", target: "/payment" });
+        }
+        if (lower.includes('admin') || lower.includes('dashboard')) {
+            return res.json({ action: "NAVIGATION", target: "/admin" });
+        }
+        if (lower.includes('register') || lower.includes('add') || lower.includes('beneficiary')) { // "add beneficiary"
+            return res.json({ action: "NAVIGATION", target: "/add-beneficiary" });
+        }
+        if (lower.includes('home') || lower.includes('menu')) {
+            return res.json({ action: "NAVIGATION", target: "/home" });
+        }
+        if (lower.includes('help') || lower.includes('commands') || lower.includes('guide')) {
+            return res.json({ action: "NAVIGATION", target: "/help" });
+        }
+
+        let reply = "I am the Smart PDS Assistant. (AI Offline)";
+
+        if (language.startsWith('ta')) {
+            if (lower.includes('rice') || lower.includes('அரிசி')) reply = `தற்போதைய அரிசி இருப்பு: ${context.inventory.rice} கிலோ.`;
+            else if (lower.includes('shop') || lower.includes('கடை')) reply = `மொத்தம் ${context.shops} நியாய விலைக் கடைகள் உள்ளன.`;
+            else reply = "மன்னிக்கவும், அரிசி அல்லது கடைகள் பற்றி கேட்கவும்.";
+        } else {
+            if (lower.includes('rice') || lower.includes('stock')) reply = `Current Rice Stock is ${context.inventory.rice} kg.`;
+            else if (lower.includes('shop')) reply = `There are ${context.shops} active ration shops.`;
+            else reply = "I can answer questions about Stock, Shops, or Navigate you.";
+        }
+
+        res.json({ text: reply });
+
+    } catch (err) {
+        console.error("AI Error:", err);
+        res.status(500).json({ error: "AI Service Failed", details: err.message });
+    }
+});
 const PORT = 5000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

@@ -7,6 +7,7 @@ import AdminDashboard from './pages/AdminDashboard';
 import AddBeneficiary from './pages/AddBeneficiary'; // New Page
 import ShopHistory from './pages/ShopHistory';
 import Payment from './pages/Payment';
+import VoiceHelp from './pages/VoiceHelp';
 import VoiceChatbot from './components/VoiceChatbot';
 
 // Placeholder for Protected Route logic
@@ -20,47 +21,56 @@ const ProtectedRoute = ({ children, isAdmin }) => {
   return children;
 };
 
+import { VoiceCommandProvider } from './context/VoiceCommandContext';
+
 function App() {
   return (
     <Router>
-      <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
-        <Routes>
-          <Route path="/" element={<Login />} />
-          <Route path="/home" element={
-            <ProtectedRoute>
-              <Home />
-            </ProtectedRoute>
-          } />
-          <Route path="/scan" element={
-            <ProtectedRoute>
-              <ScanDispense />
-            </ProtectedRoute>
-          } />
-          <Route path="/payment" element={
-            <ProtectedRoute>
-              <Payment />
-            </ProtectedRoute>
-          } />
-          <Route path="/history" element={
-            <ProtectedRoute>
-              <ShopHistory />
-            </ProtectedRoute>
-          } />
-          <Route path="/add-beneficiary" element={
-            <ProtectedRoute>
-              <AddBeneficiary />
-            </ProtectedRoute>
-          } />
-          <Route path="/admin" element={
-            <ProtectedRoute isAdmin={true}>
-              <AdminDashboard />
-            </ProtectedRoute>
-          } />
-        </Routes>
+      <VoiceCommandProvider>
+        <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+          <Routes>
+            <Route path="/" element={<Login />} />
+            <Route path="/home" element={
+              <ProtectedRoute>
+                <Home />
+              </ProtectedRoute>
+            } />
+            <Route path="/scan" element={
+              <ProtectedRoute>
+                <ScanDispense />
+              </ProtectedRoute>
+            } />
+            <Route path="/payment" element={
+              <ProtectedRoute>
+                <Payment />
+              </ProtectedRoute>
+            } />
+            <Route path="/history" element={
+              <ProtectedRoute>
+                <ShopHistory />
+              </ProtectedRoute>
+            } />
+            <Route path="/add-beneficiary" element={
+              <ProtectedRoute>
+                <AddBeneficiary />
+              </ProtectedRoute>
+            } />
+            <Route path="/admin" element={
+              <ProtectedRoute isAdmin={true}>
+                <AdminDashboard />
+              </ProtectedRoute>
+            } />
+            <Route path="/help" element={
+              <ProtectedRoute>
+                <VoiceHelp />
+              </ProtectedRoute>
+            } />
+          </Routes>
 
-        {/* Global Chatbot Widget */}
-        {/* <VoiceChatbot /> */}
-      </div>
+          {/* Global Chatbot Widget */}
+          <VoiceChatbot />
+        </div>
+      </VoiceCommandProvider>
     </Router>
   );
 }

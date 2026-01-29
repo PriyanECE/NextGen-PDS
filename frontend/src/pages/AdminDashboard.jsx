@@ -430,7 +430,7 @@ const AdminDashboard = () => {
                         <History size={20} /> Audit Logs
                     </button>
                 </nav>
-                <button onClick={() => navigate('/')} className="flex items-center gap-2 text-slate-400 hover:text-white mt-auto">
+                <button id="btn-admin-logout" onClick={() => navigate('/')} className="flex items-center gap-2 text-slate-400 hover:text-white mt-auto">
                     <LogOut size={20} /> Logout
                 </button>
             </aside>
@@ -452,7 +452,7 @@ const AdminDashboard = () => {
                                     <option value="tehsil_az">Tehsil (A-Z)</option>
                                     <option value="count_desc">Most Shops First</option>
                                 </select>
-                                <button onClick={() => setIsAddEmpModalOpen(true)} className="bg-white border text-indigo-600 px-4 py-2 rounded-lg hover:bg-slate-50 flex items-center gap-2">
+                                <button id="btn-add-emp" onClick={() => setIsAddEmpModalOpen(true)} className="bg-white border text-indigo-600 px-4 py-2 rounded-lg hover:bg-slate-50 flex items-center gap-2">
                                     <Shield size={18} /> Add Employee
                                 </button>
                             </div>

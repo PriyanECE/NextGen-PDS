@@ -31,6 +31,7 @@ const Home = () => {
                     <p className="text-slate-500">Select an option to proceed</p>
                 </div>
                 <button
+                    id="btn-logout"
                     onClick={() => navigate('/')}
                     className="p-2 text-slate-400 hover:text-red-500 transition-colors bg-white rounded-xl shadow-sm border border-slate-100"
                 >
