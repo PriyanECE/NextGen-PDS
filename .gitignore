@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+venv_gpu/
+.venv/
+ENV/
+env/
+
+# YOLO
+runs/
+*.pt
+!best.pt
+
+# Data
+train/
+test/
+phone_detections/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.log
+*.tmp
+frame_*.jpg
+detected_*.jpg
+detected_*.jpeg
+detected_*.png
+hand_detected_*.jpg
+hand_detected_*.jpeg
+result.jpg
+
+# Large files
+get-pip.py
