@@ -3,7 +3,7 @@ import {
     Users, Package, TrendingUp, LogOut, Plus, X, Shield, FileText, Trash2, MapPin,
     ChevronDown, ChevronRight, UserX, CheckCircle, XCircle, AlertTriangle, History, Camera, RefreshCw
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useToast } from '../context/ToastContext';
 import { useConfirm } from '../context/ConfirmContext';
 
@@ -14,7 +14,16 @@ const AdminDashboard = () => {
     useEffect(() => { console.log("AdminDashboard Mounted"); }, []);
 
     const { confirm } = useConfirm();
-    const [activeTab, setActiveTab] = useState('network'); // 'network' | 'requests' | 'inventory' | 'reports' | 'logs'
+    const [searchParams] = useSearchParams();
+    const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'network'); // 'network' | 'requests' | 'inventory' | 'reports' | 'logs'
+
+    // Sync URL when tab changes (Optional, but good for bookmarking)
+    useEffect(() => {
+        const tab = searchParams.get('tab');
+        if (tab && ['network', 'requests', 'inventory', 'reports', 'logs'].includes(tab)) {
+            setActiveTab(tab);
+        }
+    }, [searchParams]);
 
     // Data States
     const [employees, setEmployees] = useState([]);
@@ -414,23 +423,23 @@ const AdminDashboard = () => {
                 </div>
 
                 <nav className="flex-1 space-y-2">
-                    <button onClick={() => setActiveTab('network')} className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${activeTab === 'network' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
+                    <button id="btn-tab-network" onClick={() => setActiveTab('network')} className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${activeTab === 'network' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
                         <MapPin size={20} /> Shop Network
                     </button>
-                    <button onClick={() => setActiveTab('reports')} className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${activeTab === 'reports' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
+                    <button id="btn-tab-reports" onClick={() => setActiveTab('reports')} className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${activeTab === 'reports' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
                         <FileText size={20} /> Reports
                     </button>
-                    <button onClick={() => setActiveTab('requests')} className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${activeTab === 'requests' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
+                    <button id="btn-tab-requests" onClick={() => setActiveTab('requests')} className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${activeTab === 'requests' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
                         <UserX size={20} /> Requests
                     </button>
-                    <button onClick={() => setActiveTab('inventory')} className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${activeTab === 'inventory' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
+                    <button id="btn-tab-inventory" onClick={() => setActiveTab('inventory')} className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${activeTab === 'inventory' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
                         <Package size={20} /> Inventory
                     </button>
-                    <button onClick={() => setActiveTab('logs')} className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${activeTab === 'logs' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
+                    <button id="btn-tab-logs" onClick={() => setActiveTab('logs')} className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${activeTab === 'logs' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
                         <History size={20} /> Audit Logs
                     </button>
                 </nav>
-                <button id="btn-admin-logout" onClick={() => navigate('/')} className="flex items-center gap-2 text-slate-400 hover:text-white mt-auto">
+                <button id="btn-admin-logout" onClick={() => { localStorage.clear(); navigate('/'); }} className="flex items-center gap-2 text-slate-400 hover:text-white mt-auto">
                     <LogOut size={20} /> Logout
                 </button>
             </aside>
@@ -688,9 +697,9 @@ const AdminDashboard = () => {
                                                 {new Date(req.submissionDate).toLocaleDateString()}
                                             </td>
                                             <td className="p-4 flex gap-2">
-                                                <button onClick={() => handleRequestAction(req._id, 'Approved')} className="bg-green-100 text-green-700 px-3 py-1 rounded hover:bg-green-200 text-sm font-bold flex items-center gap-1"><CheckCircle size={14} /> Approve</button>
-                                                <button onClick={() => setActionModal({ isOpen: true, type: 'Rejected', requestId: req._id, comment: '' })} className="bg-red-100 text-red-700 px-3 py-1 rounded hover:bg-red-200 text-sm font-bold flex items-center gap-1"><XCircle size={14} /> Deny</button>
-                                                <button onClick={() => setActionModal({ isOpen: true, type: 'ChangesRequested', requestId: req._id, comment: '' })} className="bg-orange-100 text-orange-700 px-3 py-1 rounded hover:bg-orange-200 text-sm font-bold flex items-center gap-1"><AlertTriangle size={14} /> Review</button>
+                                                <button id={`btn-approve-${req._id}`} onClick={() => handleRequestAction(req._id, 'Approved')} className="bg-green-100 text-green-700 px-3 py-1 rounded hover:bg-green-200 text-sm font-bold flex items-center gap-1"><CheckCircle size={14} /> Approve</button>
+                                                <button id={`btn-deny-${req._id}`} onClick={() => setActionModal({ isOpen: true, type: 'Rejected', requestId: req._id, comment: '' })} className="bg-red-100 text-red-700 px-3 py-1 rounded hover:bg-red-200 text-sm font-bold flex items-center gap-1"><XCircle size={14} /> Deny</button>
+                                                <button id={`btn-review-${req._id}`} onClick={() => setActionModal({ isOpen: true, type: 'ChangesRequested', requestId: req._id, comment: '' })} className="bg-orange-100 text-orange-700 px-3 py-1 rounded hover:bg-orange-200 text-sm font-bold flex items-center gap-1"><AlertTriangle size={14} /> Review</button>
                                             </td>
                                         </tr>
                                     ))}
@@ -764,6 +773,7 @@ const AdminDashboard = () => {
                                     <option value="Kerosene">Kerosene</option>
                                 </select>
                                 <button
+                                    id="btn-show-data"
                                     onClick={handleApplyFilters}
                                     className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 shadow-md transition-all active:scale-95"
                                 >
@@ -831,6 +841,7 @@ const AdminDashboard = () => {
                                     </div>
                                     <div className="flex gap-2">
                                         <button
+                                            id="btn-prev-page"
                                             onClick={() => paginate(Math.max(1, currentPage - 1))}
                                             disabled={currentPage === 1}
                                             className="px-3 py-1 border rounded hover:bg-white disabled:opacity-50"
@@ -847,6 +858,7 @@ const AdminDashboard = () => {
                                                 return (
                                                     <button
                                                         key={p}
+                                                        id={`btn-page-${p}`}
                                                         onClick={() => paginate(p)}
                                                         className={`w-8 h-8 rounded-lg text-sm font-medium ${currentPage === p ? 'bg-indigo-600 text-white' : 'hover:bg-slate-200'}`}
                                                     >
@@ -856,12 +868,14 @@ const AdminDashboard = () => {
                                             })}
                                         </div>
                                         <button
+                                            id="btn-next-page"
                                             onClick={() => paginate(Math.min(totalPages, currentPage + 1))}
                                             disabled={currentPage === totalPages}
                                             className="px-3 py-1 border rounded hover:bg-white disabled:opacity-50"
                                         >
                                             Next
                                         </button>
+
                                     </div>
                                 </div>
                             )}
@@ -953,6 +967,7 @@ const AdminDashboard = () => {
                                                 onChange={(e) => setInputStock({ ...inputStock, rice: e.target.value })}
                                             />
                                             <button
+                                                id="btn-add-rice"
                                                 onClick={() => handleAddStock(inputStock.rice, 'Rice')}
                                                 className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold shadow hover:bg-indigo-700 transition-colors"
                                             >
@@ -989,6 +1004,7 @@ const AdminDashboard = () => {
                                                 onChange={(e) => setInputStock({ ...inputStock, dhal: e.target.value })}
                                             />
                                             <button
+                                                id="btn-add-dhal"
                                                 onClick={() => handleAddStock(inputStock.dhal, 'Dhal')}
                                                 className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold shadow hover:bg-indigo-700 transition-colors"
                                             >
@@ -1003,90 +1019,7 @@ const AdminDashboard = () => {
                     )}
 
                 {/* --- REPORTS TAB --- */}
-                {
-                    activeTab === 'reports' && (
-                        <div className="space-y-6">
-                            <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-slate-200">
-                                <h2 className="text-xl font-bold text-slate-800">Transaction Reports</h2>
-                                <div className="flex gap-3 w-full md:w-auto">
-                                    <select
-                                        className="p-2 border rounded-lg text-sm bg-slate-50 w-full md:w-48"
-                                        value={selectedShop}
-                                        onChange={(e) => {
-                                            setSelectedShop(e.target.value);
-                                            fetchReports();
-                                        }}
-                                    >
-                                        <option value="">All Shops</option>
-                                        {shops.map(s => <option key={s._id} value={s.name}>{s.name}</option>)}
-                                    </select>
 
-                                    <select
-                                        className="p-2 border rounded-lg text-sm bg-slate-50 w-full md:w-48"
-                                        value={txnSort}
-                                        onChange={(e) => {
-                                            setTxnSort(e.target.value);
-                                            fetchReports();
-                                        }}
-                                    >
-                                        <option value="date_desc">Newest First</option>
-                                        <option value="date_asc">Oldest First</option>
-                                        <option value="amount_desc">Highest Amount</option>
-                                        <option value="amount_asc">Lowest Amount</option>
-                                    </select>
-                                    <button onClick={fetchReports} className="p-2 bg-indigo-100 text-indigo-600 rounded-lg hover:bg-indigo-200"><RefreshCw size={18} /></button>
-                                </div>
-                            </div>
-
-                            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                                <div className="overflow-x-auto">
-                                    <table className="w-full">
-                                        <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold">
-                                            <tr>
-                                                <th className="p-4 text-left">Date</th>
-                                                <th className="p-4 text-left">Shop</th>
-                                                <th className="p-4 text-left">Beneficiary</th>
-                                                <th className="p-4 text-left">Items</th>
-                                                <th className="p-4 text-left">Amount</th>
-                                                <th className="p-4 text-left">Auth</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100">
-                                            {reports.map((txn) => (
-                                                <tr key={txn._id} className="hover:bg-slate-50 text-sm">
-                                                    <td className="p-4 text-slate-500">
-                                                        {new Date(txn.date).toLocaleDateString()} <br />
-                                                        <span className="text-xs">{new Date(txn.date).toLocaleTimeString()}</span>
-                                                    </td>
-                                                    <td className="p-4 font-medium text-slate-700">{txn.location}</td>
-                                                    <td className="p-4">
-                                                        <div className="font-bold text-slate-800">{txn.beneficiaryName}</div>
-                                                        <div className="text-xs text-slate-400">ID: {txn.cardId}</div>
-                                                    </td>
-                                                    <td className="p-4 text-slate-600">
-                                                        {txn.items?.map((i, idx) => (
-                                                            <div key={idx}>{i.item}: {i.qty} {i.unit || 'kg'}</div>
-                                                        )) || "N/A"}
-                                                    </td>
-                                                    <td className="p-4 font-bold text-emerald-600">₹{txn.totalAmount}</td>
-                                                    <td className="p-4">
-                                                        <span className={`px-2 py-1 rounded-full text-xs font-bold ${txn.authMode === 'FaceID' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'
-                                                            }`}>
-                                                            {txn.authMode}
-                                                        </span>
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                            {reports.length === 0 && (
-                                                <tr><td colSpan="6" className="p-8 text-center text-slate-400">No transactions found</td></tr>
-                                            )}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </div>
-                    )
-                }
 
             </main>
 

@@ -7,8 +7,9 @@ const Home = () => {
 
 
 
-    const MenuCard = ({ title, icon: Icon, onClick, color }) => (
+    const MenuCard = ({ id, title, icon: Icon, onClick, color }) => (
         <button
+            id={id}
             onClick={onClick}
             className={`relative overflow-hidden group p-6 rounded-3xl bg-white shadow-xl hover:shadow-2xl transition-all duration-300 border border-slate-100 flex flex-col items-center justify-center gap-4 text-center h-48 w-full`}
         >
@@ -32,7 +33,7 @@ const Home = () => {
                 </div>
                 <button
                     id="btn-logout"
-                    onClick={() => navigate('/')}
+                    onClick={() => { localStorage.clear(); navigate('/'); }}
                     className="p-2 text-slate-400 hover:text-red-500 transition-colors bg-white rounded-xl shadow-sm border border-slate-100"
                 >
                     <LogOut size={24} />
@@ -42,6 +43,7 @@ const Home = () => {
             {/* Grid Menu */}
             <div className="max-w-6xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                 <MenuCard
+                    id="btn-nav-scan"
                     title="Scan Ration Card"
                     icon={QrCode}
                     onClick={() => navigate('/scan')}
@@ -49,12 +51,14 @@ const Home = () => {
                 />
                 {/* Make Payment removed as per request (only available after scan) */}
                 <MenuCard
+                    id="btn-nav-history"
                     title="Shop History"
                     icon={Clock}
                     onClick={() => navigate('/history')}
                     color="bg-purple-500"
                 />
                 <MenuCard
+                    id="btn-nav-add"
                     title="Add Beneficiary"
                     icon={UserPlus}
                     onClick={() => navigate('/add-beneficiary')}

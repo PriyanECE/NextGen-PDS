@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { ArrowLeft, Clock, FileText, RefreshCw, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
 
 const EmptyState = ({ message }) => (
@@ -36,6 +36,8 @@ const ShopHistory = () => {
 
     const API_URL = 'http://localhost:5000/api';
 
+    const location = React.useLocation ? React.useLocation() : { search: '' }; // Check if useLocation is imported, else add it
+
     useEffect(() => {
         const user = JSON.parse(localStorage.getItem('user'));
         if (!user) {
@@ -44,7 +46,13 @@ const ShopHistory = () => {
         }
         setCurrentUser(user);
         fetchData(user);
-    }, []);
+
+        // Check URL Params for Tab Switching
+        const params = new URLSearchParams(location.search);
+        const tabParam = params.get('tab');
+        if (tabParam === 'requests') setActiveTab('requests');
+        else if (tabParam === 'transactions') setActiveTab('transactions');
+    }, [location.search]);
 
     const fetchData = async (user) => {
         setLoading(true);
@@ -71,6 +79,7 @@ const ShopHistory = () => {
                 {/* Header */}
                 <div className="flex items-center gap-4 mb-8">
                     <button
+                        id="btn-back-home"
                         onClick={() => navigate('/home')} // Or Navigate back (-1)
                         className="p-3 bg-white border border-slate-200 rounded-xl hover:bg-slate-100 transition-colors shadow-sm"
                     >
@@ -86,12 +95,14 @@ const ShopHistory = () => {
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mb-6">
                     <div className="flex border-b border-slate-100">
                         <button
+                            id="btn-tab-dispense-logs"
                             onClick={() => setActiveTab('transactions')}
                             className={`flex-1 py-4 font-bold text-sm transition-all ${activeTab === 'transactions' ? 'bg-indigo-50 text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-500 hover:bg-slate-50'}`}
                         >
                             Dispense Logs
                         </button>
                         <button
+                            id="btn-tab-my-requests"
                             onClick={() => setActiveTab('requests')}
                             className={`flex-1 py-4 font-bold text-sm transition-all ${activeTab === 'requests' ? 'bg-indigo-50 text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-500 hover:bg-slate-50'}`}
                         >

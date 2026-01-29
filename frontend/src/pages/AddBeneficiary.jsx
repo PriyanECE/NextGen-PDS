@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { User, CreditCard, Users, Save, ArrowLeft, Plus, Trash2, MapPin, Camera, Upload, X, Search, Loader2 } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
 
@@ -33,7 +33,15 @@ const AddBeneficiary = () => {
         } catch (err) { addToast("Failed to fetch shops", 'error'); }
     };
 
-    const [mode, setMode] = useState('add'); // 'add' | 'update'
+    const location = React.useLocation ? React.useLocation() : { search: '' };
+
+    // Parse initial mode from URL
+    const getInitialMode = () => {
+        const params = new URLSearchParams(location.search);
+        return params.get('mode') === 'update' ? 'update' : 'add';
+    };
+
+    const [mode, setMode] = useState(getInitialMode()); // 'add' | 'update'
     const [searchCardId, setSearchCardId] = useState('');
     const [loading, setLoading] = useState(false);
 
@@ -307,6 +315,7 @@ const AddBeneficiary = () => {
 
                                 {/* Camera Button */}
                                 <button
+                                    id="btn-open-camera"
                                     type="button"
                                     onClick={() => startCamera('head')}
                                     className="flex items-center gap-2 px-4 py-2 bg-pink-50 hover:bg-pink-100 text-pink-600 rounded-xl transition-colors font-medium text-sm"
@@ -332,6 +341,7 @@ const AddBeneficiary = () => {
                                             Cancel
                                         </button>
                                         <button
+                                            id="btn-capture-photo"
                                             type="button"
                                             onClick={takePhoto}
                                             className="px-6 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-full font-bold shadow-lg flex items-center gap-2"
@@ -504,7 +514,7 @@ const AddBeneficiary = () => {
                                 <p className="text-slate-400 text-sm">Total Members to Register</p>
                                 <p className="text-3xl font-bold">{1 + formData.familyMembers.length} <span className="text-lg text-slate-600 font-normal">Person(s)</span></p>
                             </div>
-                            <button type="submit" className="w-full md:w-auto px-8 py-4 bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-400 hover:to-rose-400 rounded-xl font-bold shadow-lg shadow-rose-900/30 transition-all transform active:scale-95 flex items-center justify-center gap-2">
+                            <button id="btn-submit-request" type="submit" className="w-full md:w-auto px-8 py-4 bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-400 hover:to-rose-400 rounded-xl font-bold shadow-lg shadow-rose-900/30 transition-all transform active:scale-95 flex items-center justify-center gap-2">
                                 <Save size={20} /> Submit Request
                             </button>
                         </div>

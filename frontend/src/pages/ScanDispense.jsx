@@ -375,9 +375,10 @@ const ScanDispense = () => {
                                             <Camera /> Start Scanner
                                         </button>
                                         <div className="mt-8 flex gap-2">
-                                            <button onClick={() => processScan('RC-1001')} className="px-3 py-1 bg-white/20 rounded text-xs">Simulate RC-1001</button>
-                                            <button onClick={() => processScan('RC-1003')} className="px-3 py-1 bg-white/20 rounded text-xs">Simulate RC-1003</button>
+                                            <button id="btn-sim-1001" onClick={() => processScan('RC-1001')} className="px-3 py-1 bg-white/20 rounded text-xs">Simulate RC-1001</button>
+                                            <button id="btn-sim-1003" onClick={() => processScan('RC-1003')} className="px-3 py-1 bg-white/20 rounded text-xs">Simulate RC-1003</button>
                                         </div>
+
                                     </div>
                                 )}
                                 {isScanning && (

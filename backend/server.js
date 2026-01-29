@@ -1048,6 +1048,7 @@ app.get('/api/reports', async (req, res) => {
 app.post('/api/ai/chat', async (req, res) => {
     try {
         const { message, language = 'en-US', role = 'employee' } = req.body;
+        console.log(`[AI Chat] Message: "${message}", Lang: ${language}, Role: ${role}`);
 
         // 1. Gather Context
         const inventory = await Inventory.findOne({ type: 'daily_stock' });
@@ -1069,60 +1070,52 @@ app.post('/api/ai/chat', async (req, res) => {
             const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
             const prompt = `
-            You are the specialized AI Assistant for the "Smart PDS" (Public Distribution System) website.
-
-            [USER CONTEXT]
-            - Role: ${role} (Strictly enforce permissions based on this)
-
-            [SYSTEM CONTEXT]
-            - Rice Stock: ${context.inventory.rice} kg
-            - Dhal/Sugar Stock: ${context.inventory.dhal} kg
-            - Active Shops: ${context.shops}
+            You are the "Smart PDS" Assistant.
+            
+            [CONTEXT]
+            - User Role: ${role}
+            - Current Language Preference: ${language} (Strictly respond in this language)
+            - Stock: Rice: ${context.inventory.rice}kg, Dhal: ${context.inventory.dhal}kg
+            - Shops: ${context.shops}
             - Pending Requests: ${context.pending}
-            - Date: ${new Date().toDateString()}
 
-            [KNOWLEDGE BASE - ROUTE MAPPING]
-            Understand that these keywords map to specific routes:
-            1. /admin ("Admin Dashboard")
-               - Keywords: Stock, Inventory, Total Sales, Reports, Graphs, Analytics, Employee Management, Shop Network.
-               - Access: ADMIN ONLY.
+            You are the "Smart PDS Assistant", a highly intelligent multilingual voice assistant.
             
-            2. /scan ("Scanner / Dispenser")
-               - Keywords: Scan QR, Sell Rice, Dispense Ration, Verify Beneficiary, Face Auth, Weighing, Bill.
-               - Used for: Distributing ration to people.
+            [CRITICAL: LANGUAGE & SCRIPT]
+            1. **DETECT LANGUAGE**: Identify the language of the User Query.
+               - Supported: English, Tamil (தமிழ்), Hindi (हिंदी), Telugu (తెలుగు), Kannada (कन्नड़), Malayalam (മലയാളം).
+            2. **RESPOND IN NATIVE SCRIPT**: 
+               - If user speaks Tamil, reply in Tamil script (e.g. "வணக்கம், நான் எப்படி உதவ முடியும்?").
+               - If user speaks Hindi, reply in Hindi script (e.g. "नमस्ते, मैं आपकी क्या सेवा कर सकता हूँ?").
+               - If user speaks "Tanglish" or mixed, reply in mixed style but prioritize Native Script for formal entities.
             
-            3. /add-beneficiary ("Registration")
-               - Keywords: Add Member, New Card, Enroll, Register, Create User.
+            [ROLE ENFORCEMENT]
+            - User Role: "${role}"
+            - **ADMIN**: Access to /admin (Dashboard), /admin?tab=reports (Reports). BLOCKED from /scan, /add-beneficiary.
+            - **EMPLOYEE**: Access to /scan, /history, /add-beneficiary. BLOCKED from /admin.
             
-            4. /history ("Transaction History")
-               - Keywords: Past transactions, Sales Log, My History, Last Bill.
-            
-            5. /home ("Main Menu")
-               - Keywords: Home, Dashboard, Start, Menu.
-            
-            6. /help ("Voice Guide")
-               - Keywords: Commands, Help, What can you do, Instructions.
+            [INTENT CLASSIFICATION]
+            - If user wants to Navigate -> Return JSON {"action": "NAVIGATION", "target": "URL"}
+            - If user wants to Click -> Return JSON {"action": "CLICK", "target": "ID"}
+            - If user asks a Question -> Return JSON {"text": "Native answer"}
 
-            [ACCESS CONTROL RULES]
-            - If role is 'employee' or 'user': THEY CANNOT ACCESS /admin.
-            - If an employee asks for "Stock" or "Reports" (which are on /admin), DO NOT navigate. Instead, reply: "Access Denied. You need Admin privileges."
-            
-            - If role is 'admin': THEY CANNOT ACCESS /scan, /add-beneficiary.
-            - If an admin asks for "Open Scanner" or "Dispense", reply: "This feature is for Shop Employees only."
+            [ROUTE & ACTION MAP]
+            - "Home", "Main Menu", "Wapas": /home
+            - "Scan", "Ration", "Distribute", "Next Customer": /scan (Employee Only)
+            - "Add Member", "New Card", "Register": /add-beneficiary?mode=add (Employee Only)
+            - "Update", "Edit", "Change Details": /add-beneficiary?mode=update (Employee Only)
+            - "History", "Transactions", "Old Records": /history (Employee Only)
+            - "Reports", "Sales Report", "Audit": /admin?tab=reports (Admin Only)
+            - "Admin Panel", "Dashboard": /admin (Admin Only)
+            - "Logout", "Sign out": CLICK "btn-logout"
 
-            - Employees CAN access: /scan, /history, /home, /add-beneficiary, /help.
-            - Admins CAN access: /admin, /history, /home, /help.
-
-            [INSTRUCTIONS]
-            - Answer in ${language} (concise, max 2 sentences).
-            - Output valid JSON if a Clear Action is detected.
-            - Otherwise, output plain text response.
-
-            [RESPONSE FORMATS]
-            1. NAVIGATION: {"action": "NAVIGATION", "target": "/route_or_BACK"}
-            2. CHAT: {"text": "Your answer here"}
+            [STRICT RULES]
+            - Do NOT hallucinate targets. Use ONLY the map above.
+            - If Employee asks for Admin -> {"text": "Access Denied. You are an employee."}
+            - If Admin asks for Scanner -> {"text": "Please use Employee login for scanning."}
 
             User Query: "${message}"
+            Language Hint: User likely spoke in ${req.body.language || 'English'}
             `;
 
             const result = await model.generateContent(prompt);
@@ -1150,21 +1143,48 @@ app.post('/api/ai/chat', async (req, res) => {
         if (lower.includes('back') || lower.includes('return') || lower.includes('previous')) {
             return res.json({ action: "NAVIGATION", target: "BACK" });
         }
-        if (lower.includes('history') || lower.includes('report') || lower.includes('transactions')) {
-            return res.json({ action: "NAVIGATION", target: "/history" });
+
+        // Employee Routes (Blocked for Admin)
+        if (role !== 'admin') {
+            if (lower.includes('history') || lower.includes('report') || lower.includes('transactions')) {
+                return res.json({ action: "NAVIGATION", target: "/history?tab=transactions" });
+            }
+            if (lower.includes('request')) { // "my requests"
+                return res.json({ action: "NAVIGATION", target: "/history?tab=requests" });
+            }
+            if ((lower.includes('next') && lower.includes('customer')) || lower.includes('scan') || lower.includes('qr') || lower.includes('camera')) {
+                return res.json({ action: "NAVIGATION", target: "/scan" });
+            }
+            if (lower.includes('payment') || lower.includes('pay')) {
+                return res.json({ action: "NAVIGATION", target: "/payment" });
+            }
+            if (lower.includes('register') || lower.includes('add') || lower.includes('beneficiary')) { // "add beneficiary"
+                if (lower.includes('update') || lower.includes('edit') || lower.includes('change')) {
+                    return res.json({ action: "NAVIGATION", target: "/add-beneficiary?mode=update" });
+                }
+                return res.json({ action: "NAVIGATION", target: "/add-beneficiary?mode=add" });
+            }
         }
-        if (lower.includes('scan') || lower.includes('qr') || lower.includes('camera')) {
-            return res.json({ action: "NAVIGATION", target: "/scan" });
+
+        // Admin Routes (Blocked for Employee)
+        if (role === 'admin') {
+            // Block Employee-only keywords
+            if (lower.includes('history') || lower.includes('transactions')) {
+                return res.json({ text: "Please use 'Reports' for admin history." });
+            }
+            if (lower.includes('report')) {
+                return res.json({ action: "NAVIGATION", target: "/admin?tab=reports" });
+            }
+            if (lower.includes('admin') || lower.includes('dashboard') || lower.includes('stock')) {
+                return res.json({ action: "NAVIGATION", target: "/admin" });
+            }
+        } else {
+            // If employee asks for admin
+            if (lower.includes('admin')) {
+                return res.json({ text: "Access Denied. Admin only." });
+            }
         }
-        if (lower.includes('payment') || lower.includes('pay')) {
-            return res.json({ action: "NAVIGATION", target: "/payment" });
-        }
-        if (lower.includes('admin') || lower.includes('dashboard')) {
-            return res.json({ action: "NAVIGATION", target: "/admin" });
-        }
-        if (lower.includes('register') || lower.includes('add') || lower.includes('beneficiary')) { // "add beneficiary"
-            return res.json({ action: "NAVIGATION", target: "/add-beneficiary" });
-        }
+
         if (lower.includes('home') || lower.includes('menu')) {
             return res.json({ action: "NAVIGATION", target: "/home" });
         }
@@ -1191,5 +1211,30 @@ app.post('/api/ai/chat', async (req, res) => {
         res.status(500).json({ error: "AI Service Failed", details: err.message });
     }
 });
+// --- TTS PROXY ---
+app.get('/api/tts', (req, res) => {
+    try {
+        const { text, lang } = req.query;
+        console.log(`[TTS Proxy] Request for: "${text}" in ${lang}`);
+        if (!text || !lang) return res.status(400).json({ error: "Text and lang required" });
+
+        const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=${lang.split('-')[0]}&client=tw-ob`;
+
+        const https = require('https');
+        https.get(ttsUrl, (response) => {
+            if (response.statusCode !== 200) {
+                return res.status(response.statusCode).json({ error: "Upstream TTS failure" });
+            }
+            res.setHeader('Content-Type', 'audio/mpeg');
+            response.pipe(res);
+        }).on('error', (err) => {
+            console.error("TTS Proxy Error:", err);
+            res.status(500).json({ error: "Failed to fetch TTS" });
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 const PORT = 5000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
