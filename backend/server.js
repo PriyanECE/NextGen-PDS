@@ -146,6 +146,41 @@ const Inventory = mongoose.model('Inventory', InventorySchema);
 const Transaction = mongoose.model('Transaction', TransactionSchema);
 const Shop = mongoose.model('Shop', ShopSchema);
 
+// --- AI CHAT SERVICE (Gemini) ---
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+app.post('/api/chat', async (req, res) => {
+    try {
+        const { message, language } = req.body;
+        if (!message) return res.status(400).json({ error: "Message required" });
+
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+
+        const prompt = `
+        You are a smart, helpful assistant for the "Smart PDS" (Public Distribution System) website. 
+        Your goal is to assist users (Admins and Employees) with ration distribution, inventory management, beneficiary checks, and shop handling.
+        
+        The user is speaking in language code: ${language || 'en-IN'}.
+        The user said: "${message}"
+
+        INSTRUCTIONS:
+        1. If the user's query is related to PDS, food grains (rice, dhal, sugar, wheat), ration shops, beneficiaries, login, scanning, or website navigation, provide a helpful, concise answer in the SAME LANGUAGE as the user.
+        2. If the user asks about something completely unrelated (e.g., movies, weather, politics, jokes), politely refuse by saying "I can only assist with Smart PDS related topics" in the SAME LANGUAGE as the user.
+        3. Keep the response short (under 2 sentences) so it can be spoken out loud easily.
+        4. Do NOT output markdown or special characters. Just plain text.
+        `;
+
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const text = response.text();
+
+        res.json({ reply: text });
+    } catch (err) {
+        console.error("AI Chat Error:", err);
+        res.status(500).json({ error: "AI Service Failed", details: err.message });
+    }
+});
+
 // Routes
 
 // --- PERSISTENT FACE SERVICE ---

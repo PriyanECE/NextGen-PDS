@@ -47,22 +47,28 @@ def process_request(data):
 
         # Run Verification
         # Optimization: Switching to 'opencv' detector for speed (RetinaFace is too slow on CPU)
+        # TUNING: Using custom threshold 0.50 (relaxed) to handle posture/distance variance
         result = DeepFace.verify(
             img1_path=img1_path,
             img2_path=img2_path,
             model_name="Facenet512",
             detector_backend="opencv", 
+            distance_metric="cosine",
             enforce_detection=False,
             align=True
         )
 
+        distance = result["distance"]
+        CUSTOM_THRESHOLD = 0.50
+        is_match = distance <= CUSTOM_THRESHOLD
+
         return {
             "success": True,
-            "match": result["verified"],
-            "confidence": 1 - result["distance"],
-            "distance": result["distance"],
-            "threshold": result["threshold"],
-            "message": "Match Found" if result["verified"] else "Face Mismatch"
+            "match": is_match, # Override with custom threshold
+            "confidence": 1 - distance,
+            "distance": distance,
+            "threshold": CUSTOM_THRESHOLD,
+            "message": "Match Found" if is_match else "Face Mismatch"
         }
 
     except Exception as e:

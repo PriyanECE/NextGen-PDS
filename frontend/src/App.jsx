@@ -6,7 +6,6 @@ import ScanDispense from './pages/ScanDispense';
 import AdminDashboard from './pages/AdminDashboard';
 import AddBeneficiary from './pages/AddBeneficiary'; // New Page
 import ShopHistory from './pages/ShopHistory';
-import Payment from './pages/Payment';
 import VoiceHelp from './pages/VoiceHelp';
 import VoiceChatbot from './components/VoiceChatbot';
 
@@ -52,11 +51,6 @@ function App() {
             <Route path="/scan" element={
               <ProtectedRoute>
                 <ScanDispense />
-              </ProtectedRoute>
-            } />
-            <Route path="/payment" element={
-              <ProtectedRoute>
-                <Payment />
               </ProtectedRoute>
             } />
             <Route path="/history" element={

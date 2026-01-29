@@ -36,7 +36,7 @@ const ShopHistory = () => {
 
     const API_URL = 'http://localhost:5000/api';
 
-    const location = React.useLocation ? React.useLocation() : { search: '' }; // Check if useLocation is imported, else add it
+    const location = useLocation();
 
     useEffect(() => {
         const user = JSON.parse(localStorage.getItem('user'));

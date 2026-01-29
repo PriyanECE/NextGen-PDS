@@ -45,6 +45,17 @@ const ScanDispense = () => {
         if (user) setCurrentUser(JSON.parse(user));
     }, []);
 
+    // AUTO-START SCANNER (For Voice Command)
+    useEffect(() => {
+        const query = new URLSearchParams(location.search);
+        if (query.get('start') === 'true' && step === 1 && !isScanning) {
+            console.log("Auto-starting scanner via URL param");
+            startScanner();
+            // Optional: Clean URL
+            navigate('/scan', { replace: true });
+        }
+    }, [location.search, step, isScanning]);
+
     // Load Inventory
     useEffect(() => {
         const fetchInv = async () => {
@@ -366,11 +377,11 @@ const ScanDispense = () => {
                         {/* We use 'hidden' class instead of unmounting to keep videoRef stable if needed, but conditional mount is fine if we wait for it */}
                         {(step === 1 || step === 3 || isScanning) && (
                             <div className="relative w-full h-full bg-black">
-                                <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
+                                <video ref={videoRef} className="w-full h-full object-cover transform scale-x-[-1]" muted playsInline />
 
                                 <div className="absolute inset-0 border-[24px] border-white/10 rounded-3xl pointer-events-none"></div>
                                 {!isScanning && (
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 text-white">
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 text-white z-20">
                                         <button id="btn-start-scan" onClick={startScanner} className="px-8 py-4 bg-indigo-600 rounded-full font-bold shadow-lg hover:scale-105 transition-transform flex items-center gap-2">
                                             <Camera /> Start Scanner
                                         </button>
@@ -383,7 +394,44 @@ const ScanDispense = () => {
                                 )}
                                 {isScanning && (
                                     <>
-                                        <button id="btn-stop-scan" onClick={stopScanner} className="absolute bottom-6 left-1/2 -translate-x-1/2 px-6 py-2 bg-red-500/80 text-white rounded-full text-sm backdrop-blur-sm">Stop Camera</button>
+                                        <div className="absolute top-4 right-4 flex gap-2 z-20">
+                                            {/* Flash Toggle */}
+                                            {hasFlash && (
+                                                <button
+                                                    onClick={() => {
+                                                        if (scannerRef.current) {
+                                                            scannerRef.current.toggleFlash();
+                                                            setFlashOn(!flashOn);
+                                                        }
+                                                    }}
+                                                    className={`p-3 rounded-full backdrop-blur-md ${flashOn ? 'bg-yellow-400 text-black' : 'bg-black/50 text-white'}`}
+                                                >
+                                                    <Zap size={20} className={flashOn ? 'fill-current' : ''} />
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {/* Camera Switcher (Bottom Right) */}
+                                        {cameras.length > 1 && (
+                                            <div className="absolute bottom-6 right-6 z-20">
+                                                <select
+                                                    className="bg-black/60 text-white text-xs p-2 rounded-lg border border-white/20 backdrop-blur-md outline-none"
+                                                    value={selectedCamera}
+                                                    onChange={(e) => {
+                                                        setSelectedCamera(e.target.value);
+                                                        if (scannerRef.current) {
+                                                            scannerRef.current.setCamera(e.target.value);
+                                                        }
+                                                    }}
+                                                >
+                                                    {cameras.map(cam => (
+                                                        <option key={cam.id} value={cam.id}>{cam.label || `Camera ${cam.id}`}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        )}
+
+                                        <button id="btn-stop-scan" onClick={stopScanner} className="absolute bottom-6 left-1/2 -translate-x-1/2 px-6 py-2 bg-red-500/80 text-white rounded-full text-sm backdrop-blur-sm z-20">Stop Camera</button>
                                     </>
                                 )}
 

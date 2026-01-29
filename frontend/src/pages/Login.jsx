@@ -168,6 +168,7 @@ const Login = () => {
                         {error && <p className="text-red-400 text-sm text-center">{error}</p>}
 
                         <button
+                            id="btn-login-submit"
                             type="submit"
                             disabled={loading}
                             className="w-full py-3.5 rounded-xl font-semibold shadow-lg shadow-indigo-500/30 flex items-center justify-center gap-2 transition-all group bg-gradient-to-r from-indigo-500 to-cyan-500 hover:to-cyan-400 text-white"
@@ -181,7 +182,7 @@ const Login = () => {
                 {step === 2 && (
                     <div className="space-y-6 text-center">
                         <div className="bg-black/50 rounded-2xl overflow-hidden aspect-square relative border border-white/10">
-                            <video ref={videoRef} autoPlay className="w-full h-full object-cover" />
+                            <video ref={videoRef} autoPlay className="w-full h-full object-cover transform scale-x-[-1]" />
                             {scanError && (
                                 <div className="absolute inset-0 flex items-center justify-center bg-black/80 text-red-400 p-4">
                                     <AlertTriangle className="mb-2" />
@@ -198,6 +199,7 @@ const Login = () => {
                         )}
 
                         <button
+                            id="btn-verify-face-login"
                             onClick={handleFaceVerify}
                             disabled={loading || scanError}
                             className="w-full py-3.5 rounded-xl font-semibold shadow-lg shadow-indigo-500/30 flex items-center justify-center gap-2 transition-all group bg-gradient-to-r from-green-500 to-emerald-500 hover:to-emerald-400 text-white disabled:opacity-50"
@@ -216,7 +218,7 @@ const Login = () => {
                     © 2026 Smart PDS Project. Secure Login.
                 </p>
             </motion.div>
-        </div>
+        </div >
     );
 };
 

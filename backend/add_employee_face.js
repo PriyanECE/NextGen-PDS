@@ -1,53 +1,67 @@
 const mongoose = require('mongoose');
-const fs = require('fs');
-const path = require('path');
-require('dotenv').config();
+const dotenv = require('dotenv');
 
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/smart-pds';
-const TARGET_EMAIL = process.argv[2];
-const IMG_PATH = process.argv[3];
+dotenv.config();
 
-if (!TARGET_EMAIL || !IMG_PATH) {
-    console.error("Usage: node add_employee_face.js <email> <path_to_image>");
-    process.exit(1);
-}
-
-const EmployeeSchema = new mongoose.Schema({
-    name: String,
-    email: { type: String, unique: true },
-    password: String,
-    role: { type: String, default: 'employee' },
-    shopLocation: { type: String, default: 'Main Office' },
-    gender: { type: String, default: 'Other' },
-    status: { type: String, default: 'active', enum: ['active', 'pending_disable', 'disabled'] },
-    image: { type: String, default: "" }
+const employeeSchema = new mongoose.Schema({
+    name: { type: String, required: true },
+    email: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    role: { type: String, enum: ['manager', 'employee'], default: 'employee' },
+    shopLocation: { type: String, required: true },
+    gender: { type: String, required: true },
+    faceImage: { type: String }, // Path to face image
+    status: { type: String, enum: ['active', 'pending_disable', 'disabled'], default: 'active' }
 });
 
-const Employee = mongoose.model('Employee', EmployeeSchema);
+const Employee = mongoose.model('Employee', employeeSchema);
 
-mongoose.connect(MONGO_URI)
-    .then(async () => {
-        console.log('✅ MongoDB Connected');
+const updateFaces = async () => {
+    try {
+        await mongoose.connect(process.env.MONGO_URI, {
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
+        });
+        console.log("MongoDB Connected");
 
-        try {
-            // Read Image to Base64
-            const imgBuffer = fs.readFileSync(IMG_PATH);
-            const base64Image = `data:image/jpeg;base64,${imgBuffer.toString('base64')}`;
+        const usersToUpdate = [
+            { email: 'admin@pds.com', path: 'backend/faces/admin@pds.com.jpg' },
+            { email: 'mini@gmail.com', path: 'backend/faces/mini@gmail.com.jpg' }
+        ];
 
-            const employee = await Employee.findOne({ email: TARGET_EMAIL.toLowerCase() });
-            if (!employee) {
-                console.error(`❌ Employee with email ${TARGET_EMAIL} not found!`);
-                process.exit(1);
+        for (const user of usersToUpdate) {
+            let emp = await Employee.findOneAndUpdate(
+                { email: user.email },
+                { faceImage: user.path, status: 'active' },
+                { new: true }
+            );
+
+            if (emp) {
+                console.log(`SUCCESS: Updated face for ${user.email} (${emp.name})`);
+            } else {
+                console.log(`WARNING: Employee not found for ${user.email}. Trying Manager collection...`);
+                // Schema tweak might be needed if looking for Manager
+                const Manager = mongoose.model('Manager', new mongoose.Schema({
+                    email: String,
+                    faceImage: String
+                }, { strict: false })); // Flexible schema for quick update
+
+                const mgr = await Manager.findOneAndUpdate(
+                    { email: user.email },
+                    { faceImage: user.path },
+                    { new: true }
+                );
+
+                if (mgr) console.log(`SUCCESS: Updated face for Manager ${user.email}`);
+                else console.log(`FAILED: Could not find ${user.email} in Employee or Manager.`);
             }
-
-            employee.image = base64Image;
-            await employee.save();
-            console.log(`✅ Employee (${employee.name} - ${employee.email}) face updated!`);
-
-        } catch (err) {
-            console.error("❌ Error:", err.message);
-        } finally {
-            mongoose.disconnect();
         }
-    })
-    .catch(err => console.error('❌ MongoDB Connection Error:', err));
+
+        mongoose.connection.close();
+    } catch (error) {
+        console.error("Error:", error);
+        mongoose.connection.close();
+    }
+};
+
+updateFaces();

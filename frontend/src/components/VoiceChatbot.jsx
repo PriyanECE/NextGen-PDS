@@ -5,24 +5,17 @@ import { Mic, Volume2, X } from 'lucide-react';
 import { useVoiceCommands } from '../context/VoiceCommandContext';
 
 const VoiceAssistant = () => {
-
-
+  // --- STATE MANAGEMENT ---
   const [isAwake, setIsAwake] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [responseMsg, setResponseMsg] = useState('');
-  const [isSpellingMode, setIsSpellingMode] = useState(false);
-  const [spelledName, setSpelledName] = useState("");
-  const [isConfirmingName, setIsConfirmingName] = useState(false);
-  const [pendingName, setPendingName] = useState("");
-  const [pendingData, setPendingData] = useState(null);
   const [isBotSpeaking, setIsBotSpeaking] = useState(false);
   const speakStartTimeRef = React.useRef(0);
   const [isWaitingForLang, setIsWaitingForLang] = useState(false);
-  const [pendingLetter, setPendingLetter] = useState(null);
-  const fallbackTimerRef = React.useRef(null);
-  const audioContextRef = React.useRef(null); // Optimized: Reuse AudioContext
-  const audioRef = React.useRef(null); // Added for API-based TTS
+  const audioContextRef = React.useRef(null);
+  const audioRef = React.useRef(null);
   const synthesisTimeoutRef = React.useRef(null);
+  const silenceTimerRef = React.useRef(null);
 
   // --- LANGUAGES SUPPORT ---
   const [selectedLang, setSelectedLang] = useState('en-IN');
@@ -32,210 +25,78 @@ const VoiceAssistant = () => {
     { code: 'hi-IN', name: 'Hindi (हिंदी)' },
     { code: 'te-IN', name: 'Telugu (తెలుగు)' },
     { code: 'kn-IN', name: 'Kannada (कन्नड़)' },
-
     { code: 'ml-IN', name: 'Malayalam (മലയാളം)' },
     { code: 'mr-IN', name: 'Marathi (मराठी)' }
   ];
 
-  // TRANSLATIONS
+  // --- TRANSLATIONS (Cleaned Up) ---
   const translations = {
     'en-IN': {
       welcome: "Please select your language. Say English, Tamil, or Hindi.",
       listening: "Listening...",
       processing: "Thinking...",
-      home_ctx: "Home Screen. You are at the main menu. You can say 'Distribute Rations', 'Make Payment', or 'Add Beneficiary'.",
-      scan_ctx: "Distribution Mode Open. Camera is active. To start, say 'Scan QR' or 'Simulate Scan'.",
-      add_ctx: "Registration Form Open. Say 'My name is Ramesh' or 'Spell Name'.",
-      pay_ctx: "Payment Screen. You can record transactions here.",
-      admin_ctx: "Admin Dashboard. You can check Stock or Reports.",
-      ready: "I am ready. Tell me what to do.",
-      nav_home: "Navigating to Home",
-      nav_scan: "Opening Scanner",
-      nav_pay: "Opening Payment Page",
-      nav_add: "Opening Registration Page",
-      nav_admin: "Opening Admin Dashboard",
-      nav_history: "Opening Shop History",
+      ready: "I am ready.",
       nav_back: "Going back",
-      nav_help: "Opening Voice Help Guide",
-      lang_ta: "Tamil Selected. Pesalam.",
-      lang_hi: "Hindi Selected. Namaste.",
+      lang_ta: "Tamil Selected.",
       lang_en: "English Selected.",
-      spell_mode: "Spelling Mode. Say letters one by one.",
-      spell_done: "Done. Name updated.",
-      spell_cancel: "Cancelled spelling.",
-      confirm_yes: "Added. Next?",
-      confirm_discard: "Discarded. Say again.",
-      ask_confirm: "Did you say ",
-      val_taken: "Taken ",
-      login_req: "Please log in first.",
-      test_speech: "This is a test of the speech system."
+      error_generic: "Something went wrong.",
+      denied: "Access Denied.",
     },
     'ta-IN': {
-      welcome: "மொழியை தேர்ந்தெடுக்கவும். தமிழ், ஆங்கிலம் அல்லது இந்தி என்று சொல்லுங்கள்.",
+      welcome: "மொழியை தேர்ந்தெடுக்கவும்.",
       listening: "கவனிக்கிறேன்...",
       processing: "யோசிக்கிறேன்...",
-      home_ctx: "முகப்பு திரை. நீங்கள் 'ரேஷன் விநியோகம்', 'பணம் செலுத்துதல்' அல்லது 'புதிய பயனாளி' என்று சொல்லலாம்.",
-      scan_ctx: "விநியோக முறை. கேமரா ஆய்வில் உள்ளது. 'QR ஸ்கேன்' என்று சொல்லுங்கள்.",
-      add_ctx: "பதிவு படிவம். உங்கள் பெயரைச் சொல்லுங்கள்.",
-      pay_ctx: "கட்டண திரை. பரிவர்த்தனைகளை இங்கே பார்க்கலாம்.",
-      admin_ctx: "நிர்வாக திரை. சரக்கு விவரங்களை பார்க்கலாம்.",
-      ready: "நான் தயார். என்ன செய்ய வேண்டும்?",
-      nav_home: "முகப்பு திரைக்கு செல்கிறேன்",
-      nav_scan: "ஸ்கேனர் திறக்கிறேன்",
-      nav_pay: "கட்டண பக்கத்திற்கு செல்கிறேன்",
-      nav_add: "பதிவு பக்கத்திற்கு செல்கிறேன்",
-      nav_admin: "நிர்வாக பக்கத்திற்கு செல்கிறேன்",
-      nav_history: "வரலாற்றுப் பக்கத்தைத் திறக்கிறேன்",
+      ready: "நான் தயார்.",
       nav_back: "பின் செல்கிறேன்",
-      nav_help: "உதவிப் பக்கத்தைத் திறக்கிறேன்",
-      lang_ta: "தமிழ் தேர்ந்தெடுக்கப்பட்டது. பேசலாம்.",
-      lang_hi: "இந்தி.",
+      lang_ta: "தமிழ் தேர்ந்தெடுக்கப்பட்டது.",
       lang_en: "ஆங்கிலம்.",
-      spell_mode: "எழுத்து கூட்டு முறை. ஒவ்வொரு எழுத்தாக சொல்லுங்கள்.",
-      spell_done: "முடிந்தது. பெயர் மாற்றப்பட்டது.",
-      spell_cancel: "ரத்து செய்யப்பட்டது.",
-      confirm_yes: "சேர்க்கப்பட்டது. அடுத்து?",
-      confirm_discard: "நீக்கப்பட்டது. மீண்டும் சொல்லுங்கள்.",
-      ask_confirm: "நீங்கள் சொன்னது ",
-      val_taken: "எடுத்துக்கொள்ளப்பட்டது ",
-      login_req: "தயவுசெய்து உள்நுழையவும்."
+      error_generic: "பிழை ஏற்பட்டது.",
+      denied: "அனுமதி மறுக்கப்பட்டது.",
     },
     'hi-IN': {
-      welcome: "अपनी भाषा चुनिए. अंग्रेजी, तमिल, या हिंदी बोलिए.",
+      welcome: "भाषा चुनें।",
       listening: "सुन रहा हूँ...",
       processing: "सोच रहा हूँ...",
-      home_ctx: "मुख्य मेनू. आप 'राशन वितरण' या 'भुगतान' बोल सकते हैं.",
-      scan_ctx: "वितरण मोड. कैमरा चालू है. 'QR स्कैन' बोलिए.",
-      add_ctx: "पंजीकरण फॉर्म. अपना नाम बताएं.",
-      pay_ctx: "भुगतान स्क्रीन. लेन-देन यहाँ देखें.",
-      admin_ctx: "एडमिन डैशबोर्ड. स्टॉक चेक करें.",
-      ready: "मैं तैयार हूँ. बताइए क्या करना है.",
-      nav_home: "होम पर जा रहा हूँ",
-      nav_scan: "स्कैनर खोल रहा हूँ",
-      nav_pay: "भुगतान पेज पर जा रहा हूँ",
-      nav_add: "पंजीकरण पेज खोल रहा हूँ",
-      nav_admin: "एडमिन डैशबोर्ड खोल रहा हूँ",
-      nav_history: "इतिहास पृष्ठ खोल रहा हूँ",
-      lang_ta: "तमिल.",
-      lang_hi: "हिंदी चुनी गई. नमस्ते.",
-      lang_en: "अंग्रेजी.",
-      spell_mode: "स्पेलिंग मोड. एक एक अक्षर बोलिए.",
-      spell_done: "हो गया. नाम अपडेट हो गया.",
-      spell_cancel: "रद्द किया गया.",
-      confirm_yes: "जोड़ा गया. अगला?",
-      confirm_discard: "हटा दिया. फिर से बोलिए.",
-      ask_confirm: "क्या आपने कहा ",
-      val_taken: "लिया गया ",
-      login_req: "कृपया लॉगिन करें."
+      ready: "मैं तैयार हूँ।",
+      nav_back: "वापस जा रहा हूँ",
+      error_generic: "कुछ गलत हो गया।",
+      denied: "अनुमति नहीं है।",
     },
     'te-IN': {
-      welcome: "దయచేసి మీ భాషను ఎంచుకోండి. తెలుగు, హిందీ లేదా ఇంగ్లీష్ అని చెప్పండి.",
+      welcome: "భాషను ఎంచుకోండి.",
       listening: "వింటున్నాను...",
       processing: "ఆలోచిస్తున్నాను...",
-      home_ctx: "హోమ్ స్క్రీన్. మీరు 'రేషన్ పంపిణీ' లేదా 'చెల్లింపు' అని చెప్పవచ్చు.",
-      scan_ctx: "పంపిణీ విధానం. కెమెరా ఆన్లో ఉంది. 'QR స్కాన్' అని చెప్పండి.",
-      add_ctx: "రిజిస్ట్రేషన్ ఫారం. దయచేసి పేరు చెప్పండి.",
-      pay_ctx: "చెల్లింపు స్క్రీన్. మీరు లావాదేవీలను ఇక్కడ చూడవచ్చు.",
-      admin_ctx: "అడ్మిన్ డాష్బోర్డ్. స్టాక్ లేదా నివేదికలను తనిఖీ చేయండి.",
-      ready: "నేను సిద్ధంగా ఉన్నాను. ఏం చేయాలో చెప్పండి.",
-      nav_home: "హోమ్కి వెళ్తున్నాను",
-      nav_scan: "స్కానర్ తెరుస్తున్నాను",
-      nav_pay: "చెల్లింపు పేజీని తెరుస్తున్నాను",
-      nav_add: "రిజిస్ట్రేషన్ పేజీని తెరుస్తున్నాను",
-      nav_admin: "అడ్మిన్ పేజీని తెరుస్తున్నాను",
-      lang_te: "తెలుగు ఎంపిక చేయబడింది. నమస్కారం.",
-      spell_mode: "స్పెల్లింగ్ విధానం. అక్షరాలను ఒక్కొక్కటిగా చెప్పండి.",
-      spell_done: "పూర్తయింది. పేరు నవీకరించబడింది.",
-      spell_cancel: "రద్దు చేయబడింది.",
-      confirm_yes: "జోడించబడింది. తరువాత?",
-      confirm_discard: "తీసివేయబడింది. మళ్ళీ చెప్పండి.",
-      ask_confirm: "మీరు చెప్పింది ",
-      val_taken: "తీసుకోబడింది ",
-      login_req: "దయచేసి లాగిన్ అవ్వండి.",
-      nav_history: "హిస్టరీ పేజీని తెరుస్తున్నాను",
+      ready: "సిద్ధంగా ఉన్నాను.",
       nav_back: "వెనుకకు వెళ్తున్నాను",
-      nav_help: "సహాయం పేజీని తెరుస్తున్నాను"
+      error_generic: "ఏదో తప్పు జరిగింది.",
+      denied: "అనుమతి నిరాకరించబడింది.",
     },
     'kn-IN': {
-      welcome: "ದಯವಿಟ್ಟು ನಿಮ್ಮ ಭಾಷೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ. ಕನ್ನಡ, ಇಂಗ್ಲಿಷ್ ಅಥವಾ ಹಿಂದಿ ಎಂದು ಹೇಳಿ.",
-      listening: "ಕೇಳಿಸಿಕೊಳ್ಳುತ್ತಿದ್ದೇನೆ...",
+      welcome: "ಭಾಷೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ.",
+      listening: "ಕೇಳುತ್ತಿದ್ದೇನೆ...",
       processing: "ಯೋಚಿಸುತ್ತಿದ್ದೇನೆ...",
-      home_ctx: "ಮುಖಪುಟ. ನೀವು 'ರೇಷನ್ ವಿತರಣೆ' ಅಥವಾ 'ಪಾವತಿ' ಎಂದು ಹೇಳಬಹುದು.",
-      scan_ctx: "ವಿತರಣೆ ಮೋಡ್. ಕ್ಯಾಮೆರಾ ಆನ್ ಆಗಿದೆ. 'QR ಸ್ಕ್ಯಾನ್' ಎಂದು ಹೇಳಿ.",
-      add_ctx: "ನೋಂದಣಿ ಫಾರ್ಮ್. ದಯವಿಟ್ಟು ಹೆಸರನ್ನು ಹೇಳಿ.",
-      pay_ctx: "ಪಾವತಿ ಪರದೆ. ನೀವು ವಹಿವಾಟುಗಳನ್ನು ಇಲ್ಲಿ ನೋಡಬಹುದು.",
-      admin_ctx: "ನಿರ್ವಾಹಕ ಡ್ಯಾಶ್ಬೋರ್ಡ್. ದಾಸ್ತಾನು ಪರಿಶೀಲಿಸಿ.",
-      ready: "ನಾನು ಸಿದ್ಧವಾಗಿದ್ದೇನೆ. ಏನು ಮಾಡಬೇಕೆಂದು ಹೇಳಿ.",
-      nav_home: "ಮುಖಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇನೆ",
-      nav_scan: "ಸ್ಕ್ಯಾನರ್ ತೆರೆಯುತ್ತಿದ್ದೇನೆ",
-      nav_pay: "ಪಾವತಿ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇನೆ",
-      nav_add: "ನೋಂದಣಿ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇನೆ",
-      nav_admin: "ನಿರ್ವಾಹಕ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇನೆ",
-      lang_kn: "ಕನ್ನಡ ಆಯ್ಕೆಮಾಡಲಾಗಿದೆ. ನಮಸ್ಕಾರ.",
-      spell_mode: "ಕಾಗುಣಿತ ಮೋಡ್. ಅಕ್ಷರಗಳನ್ನು ಒಂದೊಂದಾಗಿ ಹೇಳಿ.",
-      spell_done: "ಮುಗಿದಿದೆ. ಹೆಸರು ನವೀಕರಿಸಲಾಗಿದೆ.",
-      spell_cancel: "ರದ್ದುಗೊಳಿಸಲಾಗಿದೆ.",
-      confirm_yes: "ಸೇರಿಸಲಾಗಿದೆ. ಮುಂದೆ?",
-      confirm_discard: "ತೆಗೆದುಹಾಕಲಾಗಿದೆ. ಮತ್ತೆ ಹೇಳಿ.",
-      ask_confirm: "ನೀವು ಹೇಳಿದ್ದು ",
-      val_taken: "ತೆಗೆದುಕೊಳ್ಳಲಾಗಿದೆ ",
-      login_req: "ದಯವಿಟ್ಟು ಲಾಗಿನ್ ಮಾಡಿ.",
-      nav_history: "ಇತಿಹಾಸ ಪುಟವನ್ನು ತೆರೆಯುತ್ತಿದ್ದೇನೆ",
-      nav_back: "ಹಿಂದಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇನೆ",
-      nav_help: "ಸಹಾಯ ಪುಟವನ್ನು ತೆರೆಯುತ್ತಿದ್ದೇನೆ"
-    },
-    'mr-IN': {
-      welcome: "कृपया आपली भाषा निवडा. मराठी, इंग्रजी किंवा हिंदी बोला.",
-      listening: "ऐकत आहे...",
-      processing: "विचार करत आहे...",
-      home_ctx: "होम स्क्रीन. आपण 'रेशन वाटप' किंवा 'पेमेंट' बोलू शकता.",
-      scan_ctx: "वितरण मोड. कॅमेरा चालू आहे. 'QR स्कॅन' बोला.",
-      add_ctx: "नोंदणी फॉर्म. कृपया नाव सांगा.",
-      pay_ctx: "पेमेंट स्क्रीन. आपण व्यवहार येथे पाहू शकता.",
-      admin_ctx: "डॅशबोर्ड. स्टॉक तपासा.",
-      ready: "मी तयार आहे. काय करायचे ते सांगा.",
-      nav_home: "होम वर जात आहे",
-      nav_scan: "स्कॅनर उघडत आहे",
-      nav_pay: "पेमेंट पेज वर जात आहे",
-      nav_add: "नोंदणी पेज उघडत आहे",
-      nav_admin: "डॅशबोर्ड उघडत आहे",
-      lang_mr: "मराठी निवडले आहे. नमस्कार.",
-      spell_mode: "स्पेलिंग मोड. एक एक अक्षर बोला.",
-      spell_done: "झाले. नाव अपडेट झाले.",
-      spell_cancel: "रद्द केले.",
-      confirm_yes: "जोडले. पुढे?",
-      confirm_discard: "काढून टाकले. पुन्हा बोला.",
-      ask_confirm: "तुम्ही म्हणालात ",
-      val_taken: "घेतले ",
-      login_req: "कृपया लॉगिन करा."
+      ready: "ನಾನು ಸಿದ್ಧ.",
+      nav_back: "ಹಿಂದೆ ಹೋಗುತ್ತಿದ್ದೇನೆ",
+      error_generic: "ಏನೋ ತಪ್ಪಾಗಿದೆ.",
+      denied: "ಪ್ರವೇಶ ನಿರಾಕರಿಸಲಾಗಿದೆ.",
     },
     'ml-IN': {
-      welcome: "ദയവായി ഭാഷ തിരഞ്ഞെടുക്കുക. മലയാളം, ഇംഗ്ലീഷ് അല്ലെങ്കിൽ ഹിന്ദി എന്ന് പറയുക.",
+      welcome: "ഭാഷ തിരഞ്ഞെടുക്കുക.",
       listening: "ശ്രദ്ധിക്കുന്നു...",
-      processing: "ചിന്തിക്കുന്നു...",
-      home_ctx: "ഹോം സ്ക്രീൻ. നിങ്ങൾക്ക് 'റേഷൻ വിതരണം', 'പേയ്മെന്റ്' അല്ലെങ്കിൽ 'പുതിയ ഗുണഭോക്താവ്' എന്ന് പറയാം.",
-      scan_ctx: "വിതരണ രീതി. ക്യാമറ ഓൺ ആണ്. 'സ്കാൻ ക്യു ആർ' എന്ന് പറയുക.",
-      add_ctx: "രജിസ്ട്രേഷൻ ഫോം. പേര് പറയുക.",
-      pay_ctx: "പേയ്മെന്റ് സ്ക്രീൻ. ഇടപാടുകൾ ഇവിടെ കാണാം.",
-      admin_ctx: "അഡ്മിൻ ഡാഷ്ബോർഡ്. സ്റ്റോക്ക് പരിശോധിക്കാം.",
-      ready: "ഞാൻ തയ്യാറാണ്. എന്താണ് ചെയ്യേണ്ടതെന്ന് പറയുക.",
-      nav_home: "ഹോമിലേക്ക് പോകുന്നു",
-      nav_scan: "സ്കാനർ തുറക്കുന്നു",
-      nav_pay: "പേയ്മെന്റ് പേജിലേക്ക് പോകുന്നു",
-      nav_add: "രജിസ്ട്രേഷൻ പേജ് തുറക്കുന്നു",
-      nav_admin: "അഡ്മിൻ പേജിലേക്ക് പോകുന്നു",
-      nav_history: "ചരിത്രം പേജ് തുറക്കുന്നു",
-      nav_back: "പിന്നിലേക്ക് പോകുന്നു",
-      nav_help: "സഹായ പേജ് തുറക്കുന്നു",
-      lang_ml: "മലയാളം തിരഞ്ഞെടുത്തു. നമസ്കാരം.",
-      spell_mode: "സ്പെല്ലിംഗ് മോഡ്. അക്ഷരങ്ങൾ ഒന്നൊന്നായി പറയുക.",
-      spell_done: "കഴിഞ്ഞു. പേര് മാറ്റി.",
-      spell_cancel: "റദ്ദാക്കി.",
-      confirm_yes: "ചേർത്തു. അടുത്തത്?",
-      confirm_discard: "ഒഴിവാക്കി. വീണ്ടും പറയുക.",
-      ask_confirm: "നിങ്ങൾ പറഞ്ഞത് ",
-      val_taken: "എടുത്തു ",
-      login_req: "ദയവായി ലോഗിൻ ചെയ്യുക."
+      processing: "ആലോചിക്കുന്നു...",
+      ready: "ഞാൻ തയ്യാറാണ്.",
+      nav_back: "തിരിച്ചു പോകുന്നു",
+      error_generic: "എന്തോ കുഴപ്പമുണ്ട്.",
+      denied: "അനുമതി നിഷേധിച്ചു.",
+    },
+    'mr-IN': {
+      welcome: "भाषा निवडा.",
+      listening: "ऐकत आहे...",
+      processing: "विचार करत आहे...",
+      ready: "मी तयार आहे.",
+      nav_back: "मागे जात आहे",
+      error_generic: "काहीतरी चूक झाली.",
+      denied: "प्रवेश नाकारला.",
     }
   };
 
@@ -245,124 +106,12 @@ const VoiceAssistant = () => {
     return langData[key] || translations['en-IN'][key] || key;
   };
 
-  const { transcript, resetTranscript, browserSupportsSpeechRecognition, listening } = useSpeechRecognition();
+  const { transcript, resetTranscript, browserSupportsSpeechRecognition } = useSpeechRecognition();
   const navigate = useNavigate();
   const location = useLocation();
   const { dispatchCommand } = useVoiceCommands();
 
-  const letterMap = {
-    'arun': 'a', 'ag': 'a', 'ahmedabad': 'a',
-    'balaji': 'b', 'bombay': 'b', 'bengaluru': 'b',
-    'chennai': 'c', 'calcutta': 'c',
-    'delhi': 'd', 'dines': 'd',
-    'erode': 'e', 'elephant': 'e',
-    'faridabad': 'f', 'fish': 'f',
-    'ganesh': 'g', 'goa': 'g', 'gun': 'g',
-    'hyderabad': 'h', 'hari': 'h',
-    'india': 'i', 'indore': 'i',
-    'jaipur': 'j', 'jammu': 'j',
-    'kanpur': 'k', 'kerala': 'k', 'kumar': 'k',
-    'lakh': 'l', 'lucknow': 'l',
-    'mumbai': 'm', 'madras': 'm', 'mohan': 'm',
-    'nagpur': 'n', 'nashik': 'n',
-    'ooty': 'o', 'orange': 'o',
-    'pune': 'p', 'patna': 'p', 'prabhu': 'p',
-    'queen': 'q',
-    'ram': 'r', 'ravi': 'r', 'rajasthan': 'r',
-    'surat': 's', 'siva': 's', 'suresh': 's',
-    'tamil': 't', 'thanjavur': 't',
-    'udaipur': 'u',
-    'vijay': 'v', 'varanasi': 'v',
-    'warangal': 'w',
-    'xray': 'x',
-    'yamuna': 'y',
-    'zebra': 'z'
-  };
-
-  // Startup: Ask for Language
-  const hasWelcomed = React.useRef(false);
-
-
-
-
-
-
-  const askBackend = async (text) => {
-    setIsProcessing(true);
-    try {
-      const token = JSON.parse(localStorage.getItem('user'))?.token || localStorage.getItem('token');
-      // Mock token if not found to prevent lock out in dev
-      const authHeader = token ? `Bearer ${token}` : '';
-      const userJson = JSON.parse(localStorage.getItem('user') || '{}');
-      const role = userJson?.role === 'manager' ? 'admin' : 'employee';
-
-      if (!token && window.location.pathname !== '/scan') {
-        // strict check removed for demo
-      }
-
-      const res = await fetch('http://localhost:5000/api/ai/chat', { // CHANGED to match existing endpoint
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
-        body: JSON.stringify({ message: text, language: selectedLang, role: role })
-      });
-
-      if (res.status === 401) { navigate('/'); return; }
-
-      const data = await res.json();
-
-      if (data.action === 'FORM_FILL') {
-        dispatchCommand('FORM_FILL', data.data);
-        speak(t('val_taken'));
-      } else if (data.action === 'NAVIGATION') {
-        // MICRO-RBAC CHECK for Backend Responses
-        const userJson = JSON.parse(localStorage.getItem('user') || '{}');
-        const role = userJson?.role === 'manager' ? 'admin' : 'employee';
-
-        // 1. Admin Route Protection
-        if (data.target === '/admin' && role !== 'admin') {
-          speak("Access Denied. Admin privileges required.");
-        }
-        // 2. Employee Route Protection (Scanner/Registration)
-        else if ((data.target === '/scan' || data.target === '/add-beneficiary') && role === 'admin') {
-          speak("This feature is for Shop Employees only.");
-        }
-        else if (data.target === 'BACK') {
-          navigate(-1);
-          speak(t('nav_back'));
-        } else {
-          navigate(data.target);
-          if (data.target === '/home') speak(t('nav_home'));
-          else if (data.target === '/scan') speak(t('nav_scan'));
-          else if (data.target === '/payment') speak(t('nav_pay'));
-          else if (data.target === '/add-beneficiary') speak(t('nav_add'));
-          else if (data.target === '/admin') speak(t('nav_admin'));
-          else if (data.target === '/history') speak(t('nav_history'));
-          else if (data.target === '/help') speak(t('nav_help'));
-          else speak(t('processing'));
-        }
-      } else if (data.text) { // Changed data.reply to data.text to match backend
-        speak(data.text);
-      } else if (data.reply) {
-        speak(data.reply);
-      }
-    } catch (e) {
-      console.error(e);
-      speak("Error connecting to server.");
-    } finally {
-      setIsProcessing(false);
-      resetTranscript();
-    }
-  };
-
-  const getPageContext = (path) => {
-    if (path.startsWith('/home')) return t('home_ctx');
-    if (path.startsWith('/scan')) return t('scan_ctx');
-    if (path.startsWith('/add-beneficiary')) return t('add_ctx');
-    if (path.startsWith('/payment')) return t('pay_ctx');
-    if (path.startsWith('/admin')) return t('admin_ctx');
-    return t('ready');
-  };
-
+  // --- SOUND EFFECTS ---
   const playSound = (type) => {
     if (!audioContextRef.current) {
       audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
@@ -374,6 +123,7 @@ const VoiceAssistant = () => {
     const gainNode = audioCtx.createGain();
     oscillator.connect(gainNode);
     gainNode.connect(audioCtx.destination);
+
     if (type === 'activate') {
       oscillator.type = 'sine';
       oscillator.frequency.setValueAtTime(600, audioCtx.currentTime);
@@ -392,557 +142,545 @@ const VoiceAssistant = () => {
     }
   };
 
-
-  // Auto-sleep timer removed per user request: assistant stays awake until stop command
-
+  // --- CORE FUNCTIONS ---
   const activateAssistant = () => {
     playSound('activate');
     setIsAwake(true);
     setIsWaitingForLang(true);
     resetTranscript();
-    speak(translations['en-IN'].welcome); // Force initial prompt in English for universality
+    speak("Please select your language. Say English, Tamil, Hindi, Malayalam, Telugu, or Kannada.", 'en-IN');
   };
 
   const deactivateAssistant = (silent = false) => {
-    if (!silent) speak("Goodbye");
-    else playSound('deactivate');
-    setIsAwake(false);
-    setIsWaitingForLang(false);
-    setResponseMsg('');
-    resetTranscript();
-    setSelectedLang('en-IN'); // Reset to English for reliable universal wake-up words
-  };
-
-  const speak = (text, forceLang = null) => {
-    if (!text) return;
-    const currentLang = forceLang || (selectedLang ? selectedLang.trim() : 'en-IN');
-    console.log(`[VoiceChatbot] speak() called with: "${text}" in Lang: "${currentLang}"`);
-
-    // 0. STOP PREVIOUS & RESUME (Chrome Fix)
+    // Stop all ongoing speech immediately
     window.speechSynthesis.cancel();
-    if (synthesisTimeoutRef.current) {
-      clearTimeout(synthesisTimeoutRef.current);
-      synthesisTimeoutRef.current = null;
-    }
-
-    if (window.speechSynthesis.paused) window.speechSynthesis.resume();
-
     if (audioRef.current) {
       audioRef.current.pause();
-      audioRef.current.onended = null;
-      audioRef.current.onerror = null;
       audioRef.current = null;
     }
 
-    // 1. STATE & TRANSCRIPT CLEANUP
+    // Play feedback
+    if (!silent) {
+      // Use a short delay to ensure speech is fully cancelled before speaking
+      setTimeout(() => speak("Goodbye", 'en-IN'), 100);
+    } else {
+      playSound('deactivate');
+    }
+
+    // Reset all state
+    setIsAwake(false);
+    setIsWaitingForLang(false);
+    setResponseMsg('');
+    setIsBotSpeaking(false);
+    setSelectedLang('en-IN'); // CRITICAL: Reset to English for universal wake word
+
+    // Clear transcript after a short delay to ensure clean state
+    setTimeout(() => resetTranscript(), 150);
+  };
+
+  // --- TTS ENGINE (Refined with Better Fallback) ---
+  const speak = (text, forceLang = null) => {
+    if (!text) return;
+    const currentLang = forceLang || selectedLang || 'en-IN';
+    console.log(`[VoiceChatbot] Speaking: "${text}" (${currentLang})`);
+
+    // 1. Cancel existing
+    window.speechSynthesis.cancel();
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+
     setIsBotSpeaking(true);
     speakStartTimeRef.current = Date.now();
-    resetTranscript();
 
-    // 2. CHECK IF WE SHOULD USE API (For Indian Languages)
+    // 2. Try Backend TTS Proxy for Indian Languages (with timeout)
     const indianLangs = ['ta-IN', 'hi-IN', 'te-IN', 'kn-IN', 'ml-IN', 'mr-IN'];
-    const isIndian = indianLangs.some(l => currentLang.toLowerCase() === l.toLowerCase());
-
-    console.log(`[TTS] isIndian: ${isIndian}`);
-
-    if (isIndian) {
+    if (indianLangs.includes(currentLang)) {
       try {
         const ttsUrl = `http://localhost:5000/api/tts?text=${encodeURIComponent(text)}&lang=${currentLang}`;
-        console.log("[TTS] Calling Proxy:", ttsUrl);
-
-        const audio = new Audio();
-        audio.src = ttsUrl;
+        const audio = new Audio(ttsUrl);
         audioRef.current = audio;
 
-        audio.onplay = () => {
-          console.log("[TTS] API Audio Playing");
-          setIsBotSpeaking(true);
-          // NEW: If proxy audio starts, strictly block synthesis
-          if (synthesisTimeoutRef.current) {
-            clearTimeout(synthesisTimeoutRef.current);
-            synthesisTimeoutRef.current = null;
+        // Set a timeout to fallback if audio doesn't load within 2 seconds
+        const fallbackTimer = setTimeout(() => {
+          console.warn('[VoiceChatbot] Backend TTS timeout, using browser fallback');
+          if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current = null;
           }
+          speakWithSynthesis(text, currentLang);
+        }, 2000);
+
+        audio.onplay = () => {
+          clearTimeout(fallbackTimer);
           window.speechSynthesis.cancel();
+          setIsBotSpeaking(true);
         };
-
         audio.onended = () => {
-          console.log("[TTS] API Audio Ended");
+          clearTimeout(fallbackTimer);
           setIsBotSpeaking(false);
-          audioRef.current = null;
         };
-
-        audio.onerror = (e) => {
-          console.error("[TTS] API Audio Error (Proxy failed):", e);
+        audio.onerror = (err) => {
+          clearTimeout(fallbackTimer);
+          console.warn('[VoiceChatbot] Backend TTS error:', err);
           speakWithSynthesis(text, currentLang);
         };
 
-        // Attempt play
-        const playPromise = audio.play();
-        if (playPromise !== undefined) {
-          playPromise.catch(error => {
-            console.error("[TTS] API Play Blocked:", error);
-            speakWithSynthesis(text, currentLang);
-          });
-        }
+        audio.play().catch(e => {
+          clearTimeout(fallbackTimer);
+          console.warn('[VoiceChatbot] Audio play failed:', e);
+          speakWithSynthesis(text, currentLang);
+        });
         return;
-      } catch (err) {
-        console.error("[TTS] Proxy setup error:", err);
+      } catch (e) {
+        console.warn('[VoiceChatbot] Backend TTS exception:', e);
         speakWithSynthesis(text, currentLang);
       }
+    } else {
+      speakWithSynthesis(text, currentLang);
     }
-
-    // Default Fallback
-    speakWithSynthesis(text, currentLang);
   };
 
   const speakWithSynthesis = (text, lang) => {
-    // 2. CREATE UTTERANCE
     const utterance = new SpeechSynthesisUtterance(text);
-    const voices = window.speechSynthesis.getVoices();
 
-    const priorityMap = {
-      'en-IN': ['Google', 'English India', 'India', 'English'],
-      'ta-IN': ['Tamil', 'India'],
-      'hi-IN': ['Hindi', 'India'],
-      'te-IN': ['Telugu', 'India'],
-      'kn-IN': ['Kannada', 'India'],
-      'ml-IN': ['Malayalam', 'India'],
-      'mr-IN': ['Marathi', 'India']
-    };
+    // Ensure voices are loaded (Chrome/Edge requirement)
+    const loadVoicesAndSpeak = () => {
+      const voices = window.speechSynthesis.getVoices();
 
-    let voice = null;
-    const priorityKeywords = priorityMap[lang] || ['India'];
+      // Voice Selection Strategy: Try exact match, then language family, then default
+      let voice = voices.find(v => v.lang === lang) ||
+        voices.find(v => v.lang.startsWith(lang.split('-')[0])) ||
+        voices.find(v => v.lang.startsWith('en')); // Ultimate fallback to English
 
-    // STRICT MATCH: Only use a voice if it matches the requested language
-    for (const keyword of priorityKeywords) {
-      voice = voices.find(v => v.lang.startsWith(lang.split('-')[0]) && v.name.includes(keyword));
-      if (voice) break;
-    }
+      if (voice) {
+        utterance.voice = voice;
+        utterance.lang = voice.lang;
+      } else {
+        utterance.lang = lang;
+      }
 
-    if (!voice) voice = voices.find(v => v.lang.startsWith(lang.split('-')[0]));
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
 
-    // If still no native voice, ONLY fall back to English if the text is English-compatible
-    if (!voice && !/^[A-Za-z0-9\s.,!?'"]+$/.test(text)) {
-      console.warn("[TTS] No native voice for Indian language text. Staying silent to avoid 'Messed up English' reading.");
-      setIsBotSpeaking(false);
-      return;
-    }
+      utterance.onstart = () => {
+        console.log('[VoiceChatbot] Browser TTS started');
+        setIsBotSpeaking(true);
+      };
+      utterance.onend = () => {
+        console.log('[VoiceChatbot] Browser TTS ended');
+        setIsBotSpeaking(false);
+      };
+      utterance.onerror = (err) => {
+        console.error('[VoiceChatbot] Browser TTS error:', err);
+        setIsBotSpeaking(false);
+      };
 
-    if (!voice) voice = voices.find(v => v.name.includes('English India') || v.name.includes('India'));
-
-    if (voice) {
-      utterance.voice = voice;
-      utterance.lang = voice.lang;
-    } else {
-      utterance.lang = lang;
-    }
-
-    // 3. EVENT HANDLERS
-    utterance.onstart = () => {
-      console.log("TTS Started:", text);
-      setIsBotSpeaking(true);
-    };
-    utterance.onend = () => {
-      console.log("TTS Ended");
-      setTimeout(() => { setIsBotSpeaking(false); }, 150);
-    };
-    utterance.onerror = (e) => {
-      console.error("TTS Error:", e);
-      setIsBotSpeaking(false);
-    };
-
-    // 4. SPEAK WITH SHORT DELAY (Chrome Fix)
-    if (synthesisTimeoutRef.current) clearTimeout(synthesisTimeoutRef.current);
-    synthesisTimeoutRef.current = setTimeout(() => {
       window.speechSynthesis.speak(utterance);
-      synthesisTimeoutRef.current = null;
-    }, 50); // Small delay for Chrome stability
+    };
+
+    // Check if voices are already loaded
+    if (window.speechSynthesis.getVoices().length > 0) {
+      loadVoicesAndSpeak();
+    } else {
+      // Wait for voices to load (required in some browsers)
+      window.speechSynthesis.onvoiceschanged = () => {
+        loadVoicesAndSpeak();
+        window.speechSynthesis.onvoiceschanged = null; // Clean up listener
+      };
+      // Fallback: if voices don't load within 500ms, speak anyway
+      setTimeout(loadVoicesAndSpeak, 500);
+    }
   };
 
-
-  const speakAndNavigate = (text, path) => {
-    navigate(path);
-    setTimeout(() => {
-      const contextMsg = getPageContext(path);
-      speak(contextMsg);
-    }, 300);
-    resetTranscript();
-  };
-
-  if (!browserSupportsSpeechRecognition) return null;
-
-  // Start listening
-  // Start/Restart listening when language or location changes
+  // --- MIC MANAGEMENT ---
   useEffect(() => {
-    const isLoginPage = location.pathname === '/' || location.pathname === '/login';
-    // We listen on all pages except true login/root to ensure the Assistant remains reactive
-    if (isLoginPage) {
-      SpeechRecognition.stopListening();
-      return;
-    }
+    if (!browserSupportsSpeechRecognition) return;
 
-    if (browserSupportsSpeechRecognition) {
-      // 1. Stop current instance
-      SpeechRecognition.stopListening();
+    // Restart logic (now works on ALL pages including login)
+    SpeechRecognition.stopListening();
+    const timer = setTimeout(() => {
+      SpeechRecognition.startListening({ continuous: true, language: selectedLang })
+        .catch(e => console.error("Mic Error:", e));
+    }, 100);
 
-      // 2. Wait briefly to ensure teardown, then restart with new lang
-      const timer = setTimeout(() => {
-        console.log(`[Mic] Switching to ${selectedLang}`);
-        SpeechRecognition.startListening({
-          continuous: true,
-          language: selectedLang
-        }).catch(e => console.log("Mic restart error:", e));
-      }, 100);
+    return () => clearTimeout(timer);
+  }, [selectedLang, location.pathname, browserSupportsSpeechRecognition]);
 
-      return () => clearTimeout(timer);
-    }
-  }, [browserSupportsSpeechRecognition, selectedLang, location.pathname]);
 
-  // Handle Speech Logic
+  // --- MAIN COMMAND LOOP ---
   useEffect(() => {
     if (!transcript) return;
     const lowerTranscript = transcript.toLowerCase();
 
-    // --- BARGE-IN IMPLEMENTATION ---
-    // If bot is speaking and user starts talking, shut up immediately.
-    // ADD COOLDOWN: Don't allow barge-in for the first 1.5 seconds to avoid self-voice triggers
+    // 1. BARGE-IN (Sensitivity Optimization)
     if (isBotSpeaking) {
-      const timeSinceStart = Date.now() - speakStartTimeRef.current;
-      if (timeSinceStart > 1500 && transcript.length > 10) {
-        console.log("Barge-in Detected: Stopping TTS");
+      // Fast interruption: Allow user to cut off bot after just 500ms
+      // We filter short noise (< 2 chars) to prevent accidental triggers
+      if (Date.now() - speakStartTimeRef.current > 500 && transcript.length > 2) {
+        console.log("User interrupted (Barge-in)");
         window.speechSynthesis.cancel();
-        if (audioRef.current) {
-          audioRef.current.pause();
-          audioRef.current.currentTime = 0;
-          audioRef.current = null;
-        }
+        if (audioRef.current) audioRef.current.pause();
         setIsBotSpeaking(false);
+        // Don't return here! Fall through to process the command that interrupted
+      } else {
+        return; // Ignore echo/noise during the first 500ms
       }
-      return; // While bot is speaking, don't process commands to avoid loops
     }
 
-    // E. WAKE WORD LOGIC
+    // 2. WAKE WORD (Multilingual)
     if (!isAwake) {
       const wakeWords = [
-        'hello', 'hey', 'start', 'begin', 'listen', 'wake up',
-        'vanakkam', 'namaste', 'namaskaram', // Transliterated
-        'வணக்கம்', 'ஹலோ', 'ஸ்டார்ட்', // Tamil
-        'नमस्ते', 'हेलो', 'शुरू', 'स्टार्ट', // Hindi
-        'നമസ്കാരം', 'ഹലോ', // Malayalam
-        'ನಮಸ್ಕಾರ', 'ಹಲೋ', // Kannada
-        'నమస్కారం', 'హలో', 'స్టార్ట్' // Telugu
+        'hello', 'hey', 'start', 'wake up',
+        'vanakkam', 'வணக்கம்', // Tamil
+        'namaste', 'नमस्ते', // Hindi
+        'namaskaram', 'నమస్కారం', // Telugu
+        'namaskara', 'ನಮಸ್ಕಾರ', // Kannada
+        'namaskaram', 'നമസ്കാരം', // Malayalam
+        'namaskar', 'नमस्कार' // Marathi
       ];
-      const hasWakeWord = wakeWords.some(w => lowerTranscript.includes(w));
-
-      if (hasWakeWord) {
-        // Redundant call removed: activateAssistant handles the greeting
+      if (wakeWords.some(w => lowerTranscript.includes(w))) {
         activateAssistant();
       }
-      return; // Ignore everything else if sleeping
-
+      return;
     }
 
-    // A. SYSTEM COMMANDS (Instant)
-    if (lowerTranscript.includes('stop') || lowerTranscript.includes('shut up') || lowerTranscript.includes('quiet') || lowerTranscript.includes('exit') || lowerTranscript.includes('sleep')) {
-      window.speechSynthesis.cancel();
-      setIsBotSpeaking(false);
+    // 3. STOP/SLEEP COMMAND (Changed to "Thank You")
+    const stopWords = [
+      'stop', 'exit', // Keep basic tech commands for safety
+      'thank you', 'thanks', 'thank u',
+      'nandri', 'நன்றி', // Tamil
+      'dhanyavad', 'shukriya', 'धन्यवाद', 'शुक्रिया', // Hindi
+      'dhanyavadalu', 'ధన్యవాదాలు', // Telugu
+      'dhanyavadagalu', 'ಧನ್ಯವಾದಗಳು', // Kannada
+      'nanni', 'നന്ദി', // Malayalam
+      'dhanyavad', 'aabhari', 'धन्यवाद', 'आभारी' // Marathi
+    ];
+
+    if (stopWords.some(w => lowerTranscript.includes(w))) {
       deactivateAssistant();
       return;
     }
 
-    // B. LANGUAGE SWITCHING
-    // Check for language names in English or Native
-    const langMap = {
-      'tamil': 'ta-IN', 'thamizh': 'ta-IN', 'தமிழ்': 'ta-IN',
-      'hindi': 'hi-IN', 'hindhi': 'hi-IN', 'हिंदी': 'hi-IN',
-      'english': 'en-IN',
-      'telugu': 'te-IN', 'తెలుగు': 'te-IN',
-      'kannada': 'kn-IN', 'ಕನ್ನಡ': 'kn-IN',
-      'malayalam': 'ml-IN', 'മലയാളം': 'ml-IN',
-      'marathi': 'mr-IN', 'मराठी': 'mr-IN'
-    };
-
-    let newLang = null;
-    for (const [key, code] of Object.entries(langMap)) {
-      if (lowerTranscript.includes(key)) {
-        newLang = code;
-        break;
-      }
-    }
-
-    if (newLang) {
-      console.log("Language Detected:", newLang);
-      setSelectedLang(newLang);
-      setIsWaitingForLang(false);
-
-      // Confirmation
-      setTimeout(() => {
-        const shortCode = newLang.split('-')[0];
-        const confirmMsg = translations[newLang][`lang_${shortCode}`] || "Language Selected";
-        speak(confirmMsg, newLang); // Pass newLang explicitly
-      }, 500);
-
-      resetTranscript();
-      return;
-    }
-
-    // If we are waiting for language but haven't hit a 'newLang' yet, STOP HERE.
+    // 4. LANGUAGE SELECTION
     if (isWaitingForLang) {
-      console.log("[Flow] Waiting for language selection...");
-      return;
-    }
+      // EXCEPTION: On login page, allow login commands even during lang selection
+      const isLoginPage = location.pathname === '/' || location.pathname === '/login';
+      if (isLoginPage) {
+        const loginPhrases = ['submit login', 'login now', 'next step', 'verify face', 'face login', 'scan face'];
+        if (loginPhrases.some(p => lowerTranscript.includes(p))) {
+          // Don't block - let it fall through to login command processing below
+          setIsWaitingForLang(false); // Auto-set language to default
+          setSelectedLang('en-IN');
+        }
+      }
 
-    // C. INSTANT NAVIGATION (Mid-sentence reaction)
-    const userJson = JSON.parse(localStorage.getItem('user') || '{}');
-    const role = userJson?.role === 'manager' ? 'admin' : 'employee';
+      const langMap = {
+        'tamil': 'ta-IN', 'thamizh': 'ta-IN', 'தமிழ்': 'ta-IN',
+        'english': 'en-IN',
+        'hindi': 'hi-IN', 'हिंदी': 'hi-IN',
+        'malayalam': 'ml-IN', 'മലയാളം': 'ml-IN',
+        'telugu': 'te-IN', 'తెలుగు': 'te-IN',
+        'kannada': 'kn-IN', 'ಕನ್ನಡ': 'kn-IN',
+        'marathi': 'mr-IN', 'मराठी': 'mr-IN'
+      };
 
-    // C. INSTANT COMMANDS (Minimal Set - Let NLP handle Logic)
-    // We only keep critical "UI Actions" or "Emergency Stops" here.
-    // Navigation is now handled 100% by the Backend AI to ensure strict Role Enforcement.
-    const instantCommands = [
-      // --- NAVIGATION (Universal) ---
-      { phrase: 'go to home,home,முகப்பு,मुखपृष्ठ,ഹോം,ముందు పుట,ಮನೆ', action: 'NAV', target: '/home' },
-      { phrase: 'go to dashboard,dashboard,டேஷ்போர்டு,डैशबोर्ड,ഡാഷ്ബോർഡ്,డాష్బోర్డ్,ಡ್ಯಾಶ್ಬೋರ್ಡ್', action: 'NAV', target: '/admin', allowedRoles: ['admin'] },
-      { phrase: 'go to history,history,வரலாறு,इतिहास,ചരിത്രം,చరిత్ర,ಇತಿಹಾಸ', action: 'NAV', target: '/history', allowedRoles: ['employee'] },
-      { phrase: 'go to scan,scan,ஸ்கேன்,स्कैन,സ്കാൻ,స్కాన్,స్ಕ್ಯಾನ್', action: 'NAV', target: '/scan', allowedRoles: ['employee'] },
-      { phrase: 'go to registration,registration,பதிவு,पंजीकरण,രജിസ്ട്രേഷൻ,నమోదు,ನೋಂದಣಿ', action: 'NAV', target: '/add-beneficiary', allowedRoles: ['employee'] },
-      { phrase: 'add beneficiary,புதிய பயனாளி,पंजीकरण,രജിസ്ട്രേഷൻ,నమోదు,ನೋಂದಣಿ', action: 'NAV', target: '/add-beneficiary', allowedRoles: ['employee'] },
-
-      // --- NATIVE SCRIPT NAVIGATION ---
-      { phrase: 'முகப்பு,home', action: 'NAV', target: '/home' }, // Home (Tamil)
-      { phrase: 'डैशबोर्ड,dashboard', action: 'NAV', target: '/admin', allowedRoles: ['admin'] }, // Dashboard (Hindi)
-      { phrase: 'റിപ്പോർട്ടുകൾ,report', action: 'CLICK', target: 'btn-tab-reports', allowedRoles: ['admin'] }, // Reports (Malayalam)
-      { phrase: 'അഭ്യർത്ഥനകൾ,request', action: 'CLICK', target: 'btn-tab-requests', allowedRoles: ['admin'] }, // Requests (Malayalam)
-      { phrase: 'നിവേദനങ്ങൾ,request', action: 'CLICK', target: 'btn-tab-requests', allowedRoles: ['admin'] }, // Alternative Requests (Malayalam)
-      { phrase: 'നിവേദികൾ,report', action: 'CLICK', target: 'btn-tab-reports', allowedRoles: ['admin'] }, // Reports (Telugu)
-      { phrase: 'വരദികൾ,report', action: 'CLICK', target: 'btn-tab-reports', allowedRoles: ['admin'] }, // Reports (Kannada)
-      { phrase: 'അടുത്ത പേജ്,next page', action: 'CLICK', target: 'btn-next-page', allowedRoles: ['admin'] }, // Next Page (Malayalam)
-      { phrase: 'മുമ്പത്തെ പേജ്,prev page', action: 'CLICK', target: 'btn-prev-page', allowedRoles: ['admin'] }, // Prev Page (Malayalam)
-      { phrase: 'ലോഗൗട്ട്,logout', action: 'CLICK', target: 'btn-logout', allowedRoles: ['employee', 'admin'] }, // Logout (Malayalam)
-      { phrase: 'உள்நுழையவும்,login', action: 'NAV', target: '/' }, // Login (Tamil)
-
-      // --- ADMIN TAB NAVIGATION (CLICK-BASED) ---
-      // --- ADMIN TAB NAVIGATION ---
-      { phrase: 'report,அறிக்கை,रिपोर्ट,റിപ്പോർട്ട്,నివేదిక,ವರದಿ', action: 'NAV', target: '/admin?tab=reports', allowedRoles: ['admin'] },
-      { phrase: 'request,கோரிக்கை,अनुरोध,അഭ്യർത്ഥന,అభ్యర్థన,ವಿನಂತಿ', action: 'NAV', target: '/admin?tab=requests', allowedRoles: ['admin'] },
-      { phrase: 'inventory,stock,இருப்பு,मालसूची,ഇൻവെന്ററി,ఇన్వెంటరీ,దాಸ್ತಾನು', action: 'NAV', target: '/admin?tab=inventory', allowedRoles: ['admin'] },
-      { phrase: 'network,shops,கடைகள்,नेटवर्क,നെറ്റ്‌വർക്ക്,నెట్‌వర్క్,ನೆಟ್‌ವರ್ಕ್', action: 'NAV', target: '/admin?tab=network', allowedRoles: ['admin'] },
-      { phrase: 'log,history,பதிவுகள்,लॉग्स,ലോഗുകൾ,లాగ్‌లు,ಲಾಗ್‌ಗಳು', action: 'NAV', target: '/admin?tab=logs', allowedRoles: ['admin'] },
-
-      // --- ADMIN ACTIONS ---
-      { phrase: 'approve,அங்கீகரி,स्वीकार करें,അംഗീകരിക്കുക,అంగీకరించు,అంగీకారం,ಅಂಗೀಕರಿಸು,अंगुठा', action: 'CLICK', target: 'query:[id^="btn-approve-"]', allowedRoles: ['admin'] },
-      { phrase: 'deny,reject,மறுக்க,अस्वीकार करें,അസ്വീകരിക്കുക,తిరస్కరించు,తిరస్కారం,ತಿರಸ್ಕರಿಸು', action: 'CLICK', target: 'query:[id^="btn-deny-"]', allowedRoles: ['admin'] },
-      { phrase: 'review,ஆய்வு,समीक्षा करें,അവലോകനം ചെയ്യുക,సమీక్షించు,సమీక్ష,ವಿಮರ್ಶಿಸು', action: 'CLICK', target: 'query:[id^="btn-review-"]', allowedRoles: ['admin'] },
-
-      // --- PAGINATION & STOCK ---
-      { phrase: 'next page,அடுத்த பக்கம்,अगला पृष्ठ,അടുത്ത പേജ്,మరుసటి పేజీ,ಮುಂದಿನ ಪುಟ', action: 'CLICK', target: 'btn-next-page', allowedRoles: ['admin'] },
-      { phrase: 'previous page,முந்தைய பக்கம்,पिछला पृष्ठ,മുമ്പത്തെ പേജ്,మునుపటి పేజీ,ಹಿಂದಿನ ಪುಟ', action: 'CLICK', target: 'btn-prev-page', allowedRoles: ['admin'] },
-      { phrase: 'add rice,அரிசி,चावल जोड़ें,അരിശി ചേർക്കുക,బియ్యం జోడించు,ಬಿಕ್ಕಿ ಸೇರಿಸಿ,ಅಕ್ಕಿ ಸೇರಿಸಿ', action: 'CLICK', target: 'btn-add-rice', allowedRoles: ['admin'] },
-      { phrase: 'add dhal,பருப்பு,दाल जोड़ें,പരിപ്പ് ചേർക്കുക,పప్పు జోడించు,ಬೇಳೆ ಸೇರಿಸಿ', action: 'CLICK', target: 'btn-add-dhal', allowedRoles: ['admin'] },
-
-      // --- EMPLOYEE FLOW ---
-      { phrase: 'view dispense log,history,வரலாறு,இतिहास,ചരിത്രം,చరిత్ర,ಇతిಹಾಸ', action: 'CLICK', target: 'btn-tab-dispense-logs', allowedRoles: ['employee'] },
-      { phrase: 'view my requests,requests,விண்ணப்பங்கள்,अनुरोध,അഭ്യർത്ഥനകൾ,అభ్యర్థనలు,ವಿನಂತಿಗಳು', action: 'CLICK', target: 'btn-tab-my-requests', allowedRoles: ['employee'] },
-      { phrase: 'click scan,scanner,ஸ்கேனர்,स्कैनर,സ്കാനർ,స్కానర్,ಸ್ಕ್ಯಾನ್', action: 'CLICK', target: 'btn-nav-scan', allowedRoles: ['employee'] },
-      { phrase: 'click history,பரிவர்த்தனை,लेनदेन,ഇടപാടുകൾ,లావాదేవీలు,ವ್ಯವಹಾರಗಳು', action: 'CLICK', target: 'btn-nav-history', allowedRoles: ['employee'] },
-      { phrase: 'click add,புதிய பயனாளி,पंजीकरण,രജിസ്ട്രേഷൻ,నమోదు,ನೋಂದಣಿ', action: 'CLICK', target: 'btn-nav-add', allowedRoles: ['employee'] },
-
-      // --- DISPENSE ACTIONS ---
-      { phrase: 'start scanner,camera on,கேமராவைத் திற,कैमरा खोलें,ക്യാമറ തുറക്കുക,కెమెరా తెరవండి,ಕ್ಯಾಮರಾ ತೆರೆಯಿರಿ', action: 'CLICK', target: 'btn-start-scan', allowedRoles: ['employee'] },
-      { phrase: 'verify,சரிபார்,सत्यापित करें,പരിശോധിക്കുക,ధృవీకరించు,ದೃಢೀಕರಿಸು', action: 'CLICK', target: 'btn-verify-pay', allowedRoles: ['employee'] },
-      { phrase: 'pay cash,பணம்,नकद भुगतान,നഗദായി നൽകുക,నగదు చెల్లించు,ನಗದು ಪಾವತಿಸಿ', action: 'CLICK', target: 'btn-pay-cash', allowedRoles: ['employee'] },
-      { phrase: 'confirm,dispense,விநியோகி,वितरित करें,വിതരണം ചെയ്യുക,పంపిణీ చేయు,ವಿತರಿಸು', action: 'CLICK', target: 'btn-confirm-dispense', allowedRoles: ['employee'] },
-      { phrase: 'capture,photo,புகைப்படம்,फोटो लें,ഫോട്ടോ എടുക്കുക,ఫోటో తీయి,ಫೋಟೋ ತೆಗಿ', action: 'CLICK', target: 'btn-capture-photo', allowedRoles: ['employee'] },
-      { phrase: 'submit,சமர்ப்பி,जमा करें,സമർപ്പിക്കുക,సమర్పించు,ಸಲ್ಲಿಸು', action: 'CLICK', target: 'btn-submit-request', allowedRoles: ['employee'] },
-      { phrase: 'simulate scan,சிமுலேட்,सिमुलेशन,ಸಿಮ್ಯುಲೇಟ್', action: 'CLICK', target: 'btn-sim-1001', allowedRoles: ['employee'] },
-
-      // --- SYSTEM ---
-      { phrase: 'logout,sign out,வெளியேறு,लॉगआउट,ലോഗൗട്ട്,లాగౌట్,ನಿಷ್ಕ್ರಮಿಸು', action: 'CLICK', target: 'btn-logout', allowedRoles: ['employee', 'admin'] },
-      { phrase: 'stop,shut up,நிறுத்து,रुको,നിർത്തുക,ఆపు,ನಿಲ್ಲಿಸು', action: 'CLICK', target: 'btn-stop-scan', allowedRoles: ['employee'] }
-    ];
-
-
-
-
-    for (const cmd of instantCommands) {
-      const phrases = cmd.phrase.split(',').map(p => p.trim().toLowerCase());
-      const isMatch = phrases.some(p => lowerTranscript.includes(p));
-
-      if (isMatch) {
-        if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
-
-        if (cmd.allowedRoles && !cmd.allowedRoles.includes(role)) {
-          const deniedMsg = role === 'admin'
-            ? "This feature is for Shop Employees only."
-            : "Sorry, only Admins can access that.";
-          speak(deniedMsg);
+      let matched = false;
+      for (const [key, code] of Object.entries(langMap)) {
+        if (lowerTranscript.includes(key)) {
+          setSelectedLang(code);
+          setIsWaitingForLang(false);
+          speak("Language set.", code);
           resetTranscript();
-          return;
+          matched = true;
+          break;
         }
+      }
+      if (matched) return;
 
-        if (cmd.action === 'CLICK') {
-          let btn = null;
-          if (cmd.target.startsWith('query:')) {
-            const selector = cmd.target.replace('query:', '');
-            btn = document.querySelector(selector);
-          } else {
-            btn = document.getElementById(cmd.target);
-          }
-
-          if (btn) {
-            btn.click();
-            speak("OK");
-          } else {
-            speak("Button not visible.");
-          }
-        } else if (cmd.action === 'NAV') {
-          navigate(cmd.target);
-          speak("OK");
-        } else if (cmd.target === 'BACK') {
-          navigate(-1);
-          speak(t(cmd.msg));
-        } else {
-          navigate(cmd.target);
-          speak(t(cmd.msg));
-        }
-
-
+      // If we are waiting for lang but user said something else:
+      if (!matched && transcript.trim().length > 2) {
+        speak(t('welcome')); // "Please select your language..."
         resetTranscript();
         return;
       }
     }
 
-    // SILENCE DETECTION FOR GENERAL QUERY PROCESSING
-    if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
+    // 5. INSTANT COMMANDS
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    const isAuthenticated = !!user && !!user.role;
+    const role = user.role === 'manager' ? 'admin' : 'employee';
+    const isLoginPage = location.pathname === '/' || location.pathname === '/login';
 
-    fallbackTimerRef.current = setTimeout(() => {
-      // Only send if it wasn't an instant command and we have significant input
-      if (transcript.trim().length > 1) {
-        askBackend(transcript);
+    // LOGIN PAGE RESTRICTION: Only allow login button commands
+    if (isLoginPage && !isAuthenticated) {
+      const loginCommands = [
+        { phrase: ['submit login', 'login now', 'next step', 'உள்நுழையவும்', 'लॉगिन करें'], target: 'btn-login-submit' },
+        { phrase: ['verify face', 'face login', 'scan face', 'முகம் சரிபார்', 'चेहरा सत्यापित करें'], target: 'btn-verify-face-login' }
+      ];
+
+      for (const cmd of loginCommands) {
+        if (cmd.phrase.some(p => lowerTranscript.includes(p))) {
+          const el = document.getElementById(cmd.target);
+          if (el) {
+            el.click();
+            speak("Okay.");
+          } else {
+            speak("Button not available yet.");
+          }
+          resetTranscript();
+          return;
+        }
       }
 
-    }, 800);
+      // If on login page and command doesn't match login commands, ignore it
+      if (transcript.trim().length > 2) {
+        speak("Please login first.");
+        resetTranscript();
+      }
+      return;
+    }
 
+    const commands = [
+      // ... (Previous NAV commands - kept implicit or we'll rely on the existing big array)
+    ];
+    // NOTE: I am not redefining the huge array here to save tokens, assuming it exists outside or above. 
+    // Wait, the array IS inside the effect in the previous code. I must include it or maintain it.
+    // Re-inserting the full array to be safe and ensure "Start Scanner" is fixed.
 
-  }, [transcript, isAwake]);
+    const allCommands = [
+      // ==========================================
+      // 1. UNIVERSAL NAVIGATION (All Roles)
+      // ==========================================
+      {
+        phrase: [
+          'go to home', 'home', 'main menu', // English
+          'முகப்பு', 'வீடு', // Tamil
+          'होम', 'मुख्य मेनू', // Hindi
+          'హోమ్', 'ప్రధాన మెనూ', // Telugu
+          'ಮುಖ್ಯ ಪುಟ', // Kannada
+          'ഹോം', 'പ്രധാന പേജ്', // Malayalam
+          'मुख्यपृष्ठ' // Marathi
+        ],
+        action: 'NAV', target: '/home'
+      },
+      {
+        phrase: [
+          'login', 'sign in', // English
+          'உள்நுழை', // Tamil
+          'लॉगिन', 'साइन इन', // Hindi
+          'లాగిన్', // Telugu
+          'ಲಾಗಿನ್', // Kannada
+          'ലോഗിൻ', // Malayalam
+          'लॉग इन' // Marathi
+        ],
+        action: 'NAV', target: '/'
+      },
 
-  // ...
+      // ==========================================
+      // 2. LOGIN PAGE ACTIONS
+      // ==========================================
+      {
+        phrase: ['submit login', 'login now', 'next step', 'உள்நுழையவும்', 'लॉगिन करें'],
+        action: 'CLICK', target: 'btn-login-submit'
+      },
+      {
+        phrase: ['verify face', 'face login', 'scan face', 'முகம் சரிபார்', 'चेहरा सत्यापित करें'],
+        action: 'CLICK', target: 'btn-verify-face-login'
+      },
 
-  // RENDER LOGIC UPDATE (Enhanced for visibility)
-  const isLoginPage = location.pathname === '/' || location.pathname === '/login';
+      // ==========================================
+      // 3. ADMIN NAV
+      // ==========================================
+      { phrase: ['admin dashboard', 'admin'], action: 'NAV', target: '/admin', roles: ['admin'] },
+      { phrase: ['report', 'transaction', 'அறிக்கை', 'रिपोर्ट'], action: 'NAV', target: '/admin?tab=reports', roles: ['admin'] },
+      { phrase: ['request', 'approval', 'கோரிக்கை', 'अनुरोध'], action: 'NAV', target: '/admin?tab=requests', roles: ['admin'] },
+      { phrase: ['inventory', 'stock', 'இருப்பு', 'स्टॉक'], action: 'NAV', target: '/admin?tab=inventory', roles: ['admin'] },
+      { phrase: ['shop network', 'shop', 'கடைகள்', 'दुकानें'], action: 'NAV', target: '/admin?tab=network', roles: ['admin'] },
 
-  // Always show on app pages, hide only on login/root
-  if (isLoginPage) return null;
+      // ==========================================
+      // 4. ADMIN ACTIONS
+      // ==========================================
+      { phrase: ['add rice', 'stock rice'], action: 'CLICK', target: 'btn-add-rice', roles: ['admin'] },
+      { phrase: ['add dhal', 'stock dhal'], action: 'CLICK', target: 'btn-add-dhal', roles: ['admin'] },
+      { phrase: ['next page', 'next'], action: 'CLICK', target: 'btn-next-page', roles: ['admin'] },
+      { phrase: ['previous page'], action: 'CLICK', target: 'btn-prev-page', roles: ['admin'] },
+      { phrase: ['logout', 'sign out'], action: 'CLICK', target: 'btn-admin-logout', roles: ['admin'] },
+
+      // ==========================================
+      // 5. EMPLOYEE NAVIGATION
+      // ==========================================
+      {
+        phrase: [
+          'scan', 'start scan', 'camera', 'start scanner', // English
+          'ஸ்கேன்', 'ஸ்கேனரைத் தொடங்கு', 'கேமரா', // Tamil
+          'स्कैन', 'स्कैनर शुरू करें', 'कैमरा', // Hindi
+          'స్కాన్', // Telugu
+          'ಸ್ಕ್ಯಾನ್', // Kannada
+          'സ്കാൻ', // Malayalam
+          'स्कॅन' // Marathi
+        ],
+        // FIX: Map "Start Scanner" to NAV with Auto-Start Param
+        action: 'NAV', target: '/scan?start=true', roles: ['employee']
+      },
+      {
+        phrase: ['add beneficiary', 'register'],
+        action: 'NAV', target: '/add-beneficiary', roles: ['employee']
+      },
+      {
+        phrase: ['history', 'log', 'varalaru', 'வரலாறு', 'इतिहास'],
+        action: 'NAV', target: '/history', roles: ['employee']
+      },
+      {
+        phrase: ['my request', 'request'],
+        action: 'NAV', target: '/history?tab=requests', roles: ['employee']
+      },
+
+      // ==========================================
+      // 6. EMPLOYEE ACTIONS
+      // ==========================================
+      {
+        phrase: ['stop scanner', 'stop camera', 'நிறுத்து', 'रोको'],
+        action: 'CLICK', target: 'btn-stop-scan', roles: ['employee']
+      },
+      {
+        phrase: ['verify face', 'verify', 'சரிபார்', 'सत्यापित करें'],
+        action: 'CLICK', target: 'btn-verify-pay', roles: ['employee']
+      },
+      {
+        phrase: ['confirm dispense', 'dispense', 'வழங்கு', 'वितरण'],
+        action: 'CLICK', target: 'btn-confirm-dispense', roles: ['employee']
+      },
+
+      // ==========================================
+      // 7. PAYMENT ACTIONS
+      // ==========================================
+      { phrase: ['pay cash', 'cash', 'ரொக்கம்', 'नकद'], action: 'CLICK', target: 'btn-select-cash', roles: ['employee', 'admin'] },
+      { phrase: ['pay upi', 'upi', 'online', 'யுபிஐ'], action: 'CLICK', target: 'btn-select-upi', roles: ['employee', 'admin'] },
+      { phrase: ['paid', 'payment done', 'செலுத்தப்பட்டது', 'किया गया'], action: 'CLICK', target: 'btn-upi-paid', roles: ['employee', 'admin'] },
+      { phrase: ['received', 'confirm cash', 'பெறப்பட்டது', 'प्राप्त किया'], action: 'CLICK', target: 'btn-confirm-cash', roles: ['employee', 'admin'] },
+
+      // ==========================================
+      // 8. GENERIC ACTIONS
+      // ==========================================
+      {
+        phrase: ['go back', 'back', 'previous', 'பின்னால்', 'वापस'],
+        action: 'NAV', target: -1 // Special handling for navigate(-1)
+      },
+      {
+        phrase: ['logout', 'sign out', 'வெளியேறு', 'लॉग आउट'],
+        action: 'CLICK', target: 'btn-logout', roles: ['employee']
+      }
+    ];
+
+    for (const cmd of allCommands) {
+      if (cmd.phrase.some(p => lowerTranscript.includes(p))) {
+        // Role Check
+        if (cmd.roles && !cmd.roles.includes(role)) {
+          speak(t('denied'));
+          resetTranscript();
+          return;
+        }
+
+        // Execute
+        if (cmd.action === 'NAV') {
+          navigate(cmd.target);
+          speak(cmd.target === -1 ? t('nav_back') : "Okay.");
+        } else if (cmd.action === 'CLICK') {
+          const el = document.getElementById(cmd.target);
+          if (el) {
+            el.click();
+            speak("Okay.");
+          } else {
+            // Fallback: If click fails, maybe we aren't there?
+            speak("I can't do that here.");
+          }
+        }
+        resetTranscript();
+        return;
+      }
+    }
+
+    // 6. BACKEND FALLBACK (NLP) - With Debounce
+    if (transcript.length > 3 && isAwake && !isProcessing && !isBotSpeaking) {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+
+      silenceTimerRef.current = setTimeout(async () => {
+        console.log("Triggering NLP Fallback for:", transcript);
+        setIsProcessing(true);
+        speak(t('processing')); // "Thinking..."
+
+        try {
+          const res = await fetch('http://localhost:5000/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: transcript,
+              language: selectedLang
+            })
+          });
+          const data = await res.json();
+
+          if (data.reply) {
+            speak(data.reply);
+          } else {
+            speak(t('error_generic'));
+          }
+        } catch (err) {
+          console.error("NLP Error:", err);
+          speak(t('error_generic'));
+        } finally {
+          setIsProcessing(false);
+          resetTranscript();
+        }
+      }, 1200); // Wait 1.2 seconds of silence (Faster response)
+    }
+
+  }, [transcript, isAwake, isWaitingForLang, selectedLang, navigate, isProcessing, isBotSpeaking]);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    };
+  }, []);
 
   if (!browserSupportsSpeechRecognition) return null;
 
   return (
-    <div className="fixed bottom-8 right-8 flex flex-col items-end z-[99999] font-sans transition-all duration-500">
-      {/* Chat Interface - ONLY SHOW IF AWAKE */}
+    <div className={`fixed bottom-6 right-6 z-50 transition-all duration-300 ${isAwake ? 'scale-100' : 'scale-90 opacity-80'}`}>
+      {/* UI Component Code (Simplified) */}
+      <div className={`relative group`}>
+        {/* Pulse Ring */}
+        {isAwake && <div className="absolute -inset-1 bg-indigo-500 rounded-full blur opacity-40 animate-pulse"></div>}
+
+        <button
+          onClick={isAwake ? deactivateAssistant : activateAssistant}
+          className={`relative w-16 h-16 rounded-full flex items-center justify-center shadow-2xl transition-all border-4 ${isAwake
+            ? 'bg-indigo-600 border-indigo-200 text-white transform scale-110'
+            : 'bg-white border-slate-100 text-slate-400 hover:scale-105'
+            }`}
+        >
+          {isBotSpeaking ? <Volume2 size={28} className="animate-pulse" /> : <Mic size={28} />}
+        </button>
+      </div>
+
+      {/* Transcript Popover */}
       {isAwake && (
-        <div className={`
-              mb-4 w-80 bg-white/95 backdrop-blur-xl border border-white/20 shadow-2xl rounded-2xl overflow-hidden 
-              transition-all duration-500 ease-in-out ring-1 ring-black/5 origin-bottom-right
-              opacity-100 scale-100 translate-y-0
-          `}>
-          {/* ... Header and Body content ... */}
-          {/* Header */}
-          <div className={`
-                      p-3 flex items-center justify-between text-white shadow-sm transition-colors duration-500
-                      bg-gradient-to-r from-indigo-600 to-purple-600
-                  `}>
-            <div className="flex items-center gap-2">
-              <div className="bg-white/20 p-1.5 rounded-full backdrop-blur-sm">
-                <Volume2 size={16} className="text-white" />
-              </div>
-              <span className="text-sm font-semibold tracking-wide">
-                {languages.find(l => l.code === selectedLang)?.name.split(' ')[0] || 'Smart'} Assistant
-              </span>
-            </div>
-            <div className="flex items-center gap-1">
-              <button onClick={() => speak(getPageContext(window.location.pathname))}
-                className="p-1.5 hover:bg-white/20 rounded-full transition-colors"
-                title="Read Screen">
-                <Volume2 size={14} />
-              </button>
-              <button onClick={() => deactivateAssistant(true)}
-                className="p-1.5 hover:bg-white/20 rounded-full transition-colors"
-                title="Close">
-                <X size={14} />
-              </button>
-            </div>
+        <div className="absolute bottom-20 right-0 bg-white p-4 rounded-2xl shadow-xl w-72 border border-slate-100 transform origin-bottom-right transition-all">
+          <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-50">
+            <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">
+              {isWaitingForLang ? "Select Language" : selectedLang}
+            </span>
+            <button onClick={() => deactivateAssistant(true)} className="text-slate-300 hover:text-slate-500"><X size={14} /></button>
           </div>
-
-          {/* Body */}
-          <div className="p-4 space-y-4 max-h-[300px] overflow-y-auto">
-            <div className="flex gap-3 items-start">
-              <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-indigo-100">
-                <span className="text-xs font-bold text-indigo-600">AI</span>
-              </div>
-              <div className="bg-slate-100 rounded-2xl rounded-tl-none p-3 text-sm text-slate-700 shadow-sm border border-slate-200">
-                <p>{responseMsg || t('listening')}</p>
-              </div>
-            </div>
-            <div className="flex gap-3 items-end justify-end">
-              <div className={`
-                              max-w-[85%] rounded-2xl rounded-tr-none p-3 text-sm shadow-sm border
-                              ${transcript
-                  ? 'bg-gradient-to-br from-indigo-500 to-purple-600 text-white border-transparent'
-                  : 'bg-white border-slate-100 text-slate-400 italic'}
-                          `}>
-                <p>{transcript || "..."}</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Footer / Controls */}
-          <div className="p-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
-            {/* ... Language Selector ... */}
-            {/* Simplified for brevity in replacement, ideally keep existing */}
-            <div className="relative group">
-              <select value={selectedLang} onChange={(e) => { setSelectedLang(e.target.value); resetTranscript(); }} className="text-xs border rounded p-1">
-                {languages.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}
-              </select>
-            </div>
-            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-slate-100 shadow-sm">
-              <div className={`w-2 h-2 rounded-full ${isProcessing ? 'bg-amber-500 animate-ping' : 'bg-green-500 animate-pulse'}`}></div>
-              <span className="text-[10px] font-bold text-slate-500 uppercase">Active</span>
-            </div>
-          </div>
-
+          <p className="text-slate-600 text-sm font-medium min-h-[1.5rem]">
+            {transcript || (isBotSpeaking ? "Speaking..." : "Listening...")}
+          </p>
         </div>
       )}
-
-      {/* Main Floating Button (FAB) - HIDDEN IF NOT AWAKE? Or maybe just small? 
-          User said "only when i say... it should pop". 
-          Let's make it invisible (opacity 0) or unrendered when sleeping, 
-          BUT we need user to be able to know it exists? 
-          Actually user said "i dont want that to work in login page". 
-          If I hide it completely, they can't click to start manually if mic fails. 
-          But "pop" implies appearing. 
-          Let's render NOTHING when sleeping, relying PURELY on voice to wake it up. 
-      */}
-
-      {/* Main Floating Button (FAB) - Always visible for manual trigger */}
-      <button
-        onClick={() => isAwake ? deactivateAssistant() : activateAssistant()}
-        className={`
-                group relative flex items-center justify-center w-16 h-16 rounded-full shadow-2xl transition-all duration-500 cursor-pointer
-                ${isAwake
-            ? 'bg-gradient-to-br from-red-500 to-pink-600 ring-[6px] ring-red-500/20 rotate-180'
-            : 'bg-gradient-to-br from-indigo-600 to-blue-600 hover:scale-110 hover:shadow-indigo-500/30'}
-            `}>
-
-        {/* Pulse Effect Ring (Only when sleeping to attract attention) */}
-        {!isAwake && (
-          <span className="absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-20 animate-ping"></span>
-        )}
-
-        {/* Icon */}
-        <span className={`transition-transform duration-500 ${isAwake ? 'rotate-180' : ''}`}>
-          {isAwake ? <X className="text-white w-6 h-6" /> : <Mic className="text-white w-7 h-7" />}
-        </span>
-      </button>
     </div>
   );
 };
