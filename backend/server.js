@@ -7,8 +7,31 @@ const { spawn } = require('child_process');
 require('dotenv').config();
 const bcrypt = require('bcryptjs');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { createServer } = require('http');
+const { Server } = require('socket.io');
+// Hardware services - WiFi and Bluetooth support
+const wifiService = require('./wifiService');
+const bluetoothService = require('./bluetoothService');
+let hardwareService = wifiService; // Default to WiFi for backward compatibility
 
 const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+    cors: {
+        origin: "http://localhost:5173", // Vite dev server
+        methods: ["GET", "POST"]
+    }
+});
+
+// Setup Socket.IO event emitter for both hardware services
+const hardwareEventEmitter = (event, data) => {
+    io.emit(event, data);
+    console.log(`[Socket.IO] Emitted: ${event}`, data);
+};
+
+wifiService.setEventEmitter(hardwareEventEmitter);
+bluetoothService.setEventEmitter(hardwareEventEmitter);
+
 app.use(express.json({ limit: '50mb' }));
 app.use(cors());
 
@@ -147,37 +170,91 @@ const Transaction = mongoose.model('Transaction', TransactionSchema);
 const Shop = mongoose.model('Shop', ShopSchema);
 
 // --- AI CHAT SERVICE (Gemini) ---
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
 
 app.post('/api/chat', async (req, res) => {
     try {
         const { message, language } = req.body;
         if (!message) return res.status(400).json({ error: "Message required" });
 
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        // Check if Gemini is configured
+        if (!genAI || !GEMINI_API_KEY || GEMINI_API_KEY === 'your_gemini_api_key_here') {
+            console.warn('[AI Chat] Gemini API key not configured');
+            return res.json({
+                reply: language === 'ta-IN' ? 'மன்னிக்கவும், AI சேவை கிடைக்கவில்லை.' :
+                    language === 'hi-IN' ? 'क्षमा करें, AI सेवा उपलब्ध नहीं है।' :
+                        language === 'te-IN' ? 'క్షమించండి, AI సేవ అందుబాటులో లేదు.' :
+                            language === 'kn-IN' ? 'ಕ್ಷಮಿಸಿ, AI ಸೇವೆ ಲಭ್ಯವಿಲ್ಲ.' :
+                                language === 'ml-IN' ? 'ക്ഷമിക്കണം, AI സേവനം ലഭ്യമല്ല.' :
+                                    language === 'mr-IN' ? 'क्षमस्व, AI सेवा उपलब्ध नाही.' :
+                                        'Sorry, AI service is not available.'
+            });
+        }
+
+        const model = genAI.getGenerativeModel({
+            model: "gemini-2.0-flash",
+            generationConfig: { responseMimeType: "application/json" }
+        });
 
         const prompt = `
         You are a smart, helpful assistant for the "Smart PDS" (Public Distribution System) website. 
-        Your goal is to assist users (Admins and Employees) with ration distribution, inventory management, beneficiary checks, and shop handling.
-        
-        The user is speaking in language code: ${language || 'en-IN'}.
-        The user said: "${message}"
+        The website has these pages/actions:
+        - Home Page: /home
+        - Login Page: /
+        - Admin Dashboard Tabs: /admin?tab=reports, /admin?tab=requests, /admin?tab=inventory, /admin?tab=network
+        - Scan & Dispense: /scan?start=true
+        - Common Button IDs (for CLICK action):
+            - btn-login-submit (Login button)
+            - btn-verify-face-login (Face login)
+            - btn-stop-scan (Stop camera)
+            - btn-verify-pay (Verify face for dispense)
+            - btn-confirm-dispense (Dispense grains)
+            - btn-select-cash (Cash payment)
+            - btn-select-upi (UPI payment)
+            - btn-upi-paid (UPI confirmation)
+            - btn-add-rice/btn-add-dhal (Stock entry)
+            - btn-logout (Logout)
+        - Language Codes: en-IN, ta-IN, hi-IN, te-IN, kn-IN, ml-IN, mr-IN
+
+        The user is speaking in: ${language || 'en-IN'}.
+        User message: "${message}"
 
         INSTRUCTIONS:
-        1. If the user's query is related to PDS, food grains (rice, dhal, sugar, wheat), ration shops, beneficiaries, login, scanning, or website navigation, provide a helpful, concise answer in the SAME LANGUAGE as the user.
-        2. If the user asks about something completely unrelated (e.g., movies, weather, politics, jokes), politely refuse by saying "I can only assist with Smart PDS related topics" in the SAME LANGUAGE as the user.
-        3. Keep the response short (under 2 sentences) so it can be spoken out loud easily.
-        4. Do NOT output markdown or special characters. Just plain text.
+        1. Classify the intent. If it's a navigational command, use action type "NAV". If it's a button action, use action type "CLICK".
+        2. Respond STRICTLY in this JSON format:
+        { 
+          "reply": "Brief verbal response in the user's language", 
+          "action": { "type": "NAV|CLICK|NONE", "target": "URL or ElementID" } 
+        }
+        3. Keep the "reply" extremely short (under 2 sentences).
+        4. CRITICAL: Always use the user's native script in the "reply" (Tamil, Hindi, etc.).
         `;
 
         const result = await model.generateContent(prompt);
         const response = await result.response;
         const text = response.text();
 
-        res.json({ reply: text });
+        try {
+            const parsed = JSON.parse(text);
+            res.json(parsed);
+        } catch (e) {
+            // Fallback for non-JSON or malformed responses
+            res.json({ reply: text, action: { type: "NONE" } });
+        }
     } catch (err) {
         console.error("AI Chat Error:", err);
-        res.status(500).json({ error: "AI Service Failed", details: err.message });
+        // Return language-specific error message
+        const { language } = req.body;
+        res.json({
+            reply: language === 'ta-IN' ? 'மன்னிக்கவும், புரியவில்லை.' :
+                language === 'hi-IN' ? 'क्षमा करें, समझ नहीं आया।' :
+                    language === 'te-IN' ? 'క్షమించండి, అర్థం కాలేదు.' :
+                        language === 'kn-IN' ? 'ಕ್ಷಮಿಸಿ, ಅರ್ಥವಾಗಲಿಲ್ಲ.' :
+                            language === 'ml-IN' ? 'ക്ഷമിക്കണം, മനസ്സിലായില്ല.' :
+                                language === 'mr-IN' ? 'क्षमस्व, समजले नाही.' :
+                                    'Sorry, I did not understand.'
+        });
     }
 });
 
@@ -351,19 +428,25 @@ app.post('/api/auth/verify-employee-face', async (req, res) => {
                 if (fs.existsSync(storedImagePath)) fs.unlinkSync(storedImagePath);
             }
 
-            if (result.match) {
+            if (result.authenticated) {
                 res.json({
                     success: true,
-                    message: "Face Verified",
+                    message: "Face Verified & Liveness Confirmed",
                     confidence: result.confidence,
-                    distance: result.distance
+                    distance: result.distance,
+                    liveness: result.liveness
                 });
             } else {
+                let message = "Face Mismatch";
+                if (result.match && !result.liveness) {
+                    message = "⚠️ Spoofing Detected! Please use a live face.";
+                }
                 res.json({
                     success: false,
-                    message: "Face Mismatch",
+                    message: message,
                     confidence: result.confidence,
-                    distance: result.distance
+                    distance: result.distance,
+                    liveness: result.liveness
                 });
             }
         } catch (err) {
@@ -847,6 +930,16 @@ app.post('/api/verify-face', async (req, res) => {
                 if (fs.existsSync(liveImagePath)) fs.unlinkSync(liveImagePath);
             } catch (cleanupErr) { console.error("Cleanup error:", cleanupErr); }
 
+            // If liveness passed but match failed, or vice-versa
+            if (result.match && !result.liveness) {
+                result.error = "⚠️ Spoofing Detected! Liveness check failed.";
+                result.hint = "Please ensure a real person is in front of the camera.";
+            } else if (!result.match && result.liveness) {
+                result.error = "Face Mismatch. Not the registered user.";
+            } else if (!result.match && !result.liveness) {
+                result.error = "Verification Failed (Mismatch & Spoof Detected).";
+            }
+
             res.json(result);
         } catch (err) {
             console.error("[Verify-Face] Service Error:", err);
@@ -1120,9 +1213,9 @@ app.post('/api/ai/chat', async (req, res) => {
             1. **DETECT LANGUAGE**: Identify the language of the User Query.
                - Supported: English, Tamil (தமிழ்), Hindi (हिंदी), Telugu (తెలుగు), Kannada (कन्नड़), Malayalam (മലയാളം).
             2. **RESPOND IN NATIVE SCRIPT**: 
-               - If user speaks Tamil, reply in Tamil script (e.g. "வணக்கம், நான் எப்படி உதவ முடியும்?").
-               - If user speaks Hindi, reply in Hindi script (e.g. "नमस्ते, मैं आपकी क्या सेवा कर सकता हूँ?").
-               - If user speaks "Tanglish" or mixed, reply in mixed style but prioritize Native Script for formal entities.
+               - If user speaks Tamil, reply in Tamil script (e.g. "வணக்கம்").
+               - If user speaks Hindi, reply in Hindi script (e.g. "नमस्ते").
+               - If user speaks "Tanglish" or mixed, reply in mixed style.
             
             [ROLE ENFORCEMENT]
             - User Role: "${role}"
@@ -1130,19 +1223,63 @@ app.post('/api/ai/chat', async (req, res) => {
             - **EMPLOYEE**: Access to /scan, /history, /add-beneficiary. BLOCKED from /admin.
             
             [INTENT CLASSIFICATION]
-            - If user wants to Navigate -> Return JSON {"action": "NAVIGATION", "target": "URL"}
-            - If user wants to Click -> Return JSON {"action": "CLICK", "target": "ID"}
-            - If user asks a Question -> Return JSON {"text": "Native answer"}
+            - **Fuzzy Matching**: If user says something *similar* to a command, execute it (e.g., "purana hisab" -> History).
+            - **Ignore Fillers**: Ignore polite suffixes like "ji", "andi", "avargale", "saar", "please". Focus on KEYWORDS.
+            - **Navigation**: Return JSON {"action": "NAVIGATION", "target": "URL"}
+            - **Click**: Return JSON {"action": "CLICK", "target": "ID"}
+            - **Answer**: Return JSON {"text": "Native answer"}
+            - **Hardware**: If asking for status -> {"text": "Check dashboard for weight/stock."}
 
             [ROUTE & ACTION MAP]
-            - "Home", "Main Menu", "Wapas": /home
-            - "Scan", "Ration", "Distribute", "Next Customer": /scan (Employee Only)
-            - "Add Member", "New Card", "Register": /add-beneficiary?mode=add (Employee Only)
-            - "Update", "Edit", "Change Details": /add-beneficiary?mode=update (Employee Only)
-            - "History", "Transactions", "Old Records": /history (Employee Only)
-            - "Reports", "Sales Report", "Audit": /admin?tab=reports (Admin Only)
-            - "Admin Panel", "Dashboard": /admin (Admin Only)
-            - "Logout", "Sign out": CLICK "btn-logout"
+            [ROUTE & ACTION MAP - MULTILINGUAL SUPPORT]
+            
+            1. **HOME / BACK** 
+               - Hindi: "Ghar", "Wapas", "Peeche", "Main menu"
+               - Tamil: "Veedu", "Pinnala", "Thirumba po", "Mugappu"
+               - Telugu: "Intiki", "Venakki", "Home ki vellu"
+               - Kannada: "Mane", "Hinde", "Home page"
+               - Malayalam: "Veettil", "Thirike", "Mumbilekku"
+               *(Action: /home)*
+
+            2. **SCAN / DISPENSE (Employee Only)**
+               - Hindi: "Ration do", "Scan karo", "Chalu karo", "Grahak aaya", "Rice do"
+               - Tamil: "Ration podu", "Scan pannu", "Arisi podu", "Start camera", "Customer"
+               - Telugu: "Ration ivvu", "Scan cheyyi", "Biyyam poyi", "Customer vacharu"
+               - Kannada: "Ration kodi", "Scan maadi", "Akki haki", "Start maadi"
+               - Malayalam: "Ration nalku", "Scan cheyhu", "Ari idu", "Thudanguka"
+               *(Action: /scan)*
+
+            3. **ADD / UPDATE MEMBER (Employee Only)**
+               - Hindi: "Naya member", "Naam jodo", "Card badlo", "Update karo"
+               - Tamil: "Pudhu aalu", "Member ser", "Peyar matru", "Update pannu"
+               - Telugu: "Kotha member", "Peru chersu", "Update cheyyi"
+               - Kannada: "Hosa sadsya", "Hesarannu serisi", "Card update"
+               - Malayalam: "Puthiya angam", "Angathe cherkkuka", "Update cheyyuka"
+               *(Action: /add-beneficiary?mode=add (or mode=update if "change/badlo"))*
+
+            4. **HISTORY / TRANSACTIONS (Employee Only)**
+               - Hindi: "Purana hisab", "Len den", "Pichla record", "History dikhao"
+               - Tamil: "Varalaru", "Padhaya kanakku", "Transactions kaatu", "History"
+               - Telugu: "Patha lekkalu", "Charitra", "Transactions chupinchu"
+               - Kannada: "Haleya lekka", "Itihasa", "Transactions torsi"
+               - Malayalam: "Pazhaya charithram", "Transactions kanikkuka"
+               *(Action: /history)*
+
+            5. **REPORTS / ADMIN (Admin Only)**
+               - Hindi: "Report dikhao", "Aaj ka hisab", "Total kitna hua"
+               - Tamil: "Indha maadham kanakku", "Report kaatu", "Motha kanakku"
+               - Telugu: "Report chupinchu", "Ee roju lekkalu", "Total entha"
+               - Kannada: "Report torsi", "Ivathiina lekka"
+               - Malayalam: "Report kanikkuka", "Innathe kanakku"
+               *(Action: /admin?tab=reports)*
+
+            6. **HARDWARE STATUS**
+               - All Langs: "Machine status", "Weight check", "Dispenser check", "System okay?"
+               *(Action: {"text": "Hardware Status: [Check dashboard weight/stock]"})*
+
+            7. **LOGOUT**
+               - All Langs: "Bahar jao", "Velipad", "Log out", "Sign out"
+               *(Action: CLICK "btn-logout")*
 
             [STRICT RULES]
             - Do NOT hallucinate targets. Use ONLY the map above.
@@ -1271,5 +1408,223 @@ app.get('/api/tts', (req, res) => {
     }
 });
 
+// --- SOCKET.IO SETUP ---
+io.on('connection', (socket) => {
+    console.log('[Socket.IO] Client connected:', socket.id);
+
+    // --- Vision System Events ---
+    socket.on('vision:update', async (data) => {
+        // Broadcast to frontend
+        io.emit('vision:alert', data);
+
+        // SAFETY INTERLOCK: If DANGER (Hand Detected), STOP DISPENSING
+        if (data.status === 'danger') {
+            try {
+                // Only log if we haven't logged recently to avoid spam
+                // console.log('[Safety] Hand Detected! Stopping Dispense...');
+                await hardwareService.stop();
+            } catch (err) {
+                // Ignore errors if already stopped
+            }
+        }
+    });
+
+    socket.on('disconnect', () => {
+        console.log('[Socket.IO] Client disconnected:', socket.id);
+    });
+});
+
+// Setup hardware service event emitter
+hardwareService.setEventEmitter((event, data) => {
+    io.emit(event, data);
+});
+
+// --- HARDWARE INTEGRATION ENDPOINTS ---
+
+// Connect to ESP32
+app.post('/api/hardware/connect', async (req, res) => {
+    try {
+        const { ip } = req.body; // IP address of ESP32 (e.g., 10.97.19.31)
+        const result = await hardwareService.connect(ip);
+        res.json(result);
+    } catch (err) {
+        console.error('[Hardware] Connection error:', err);
+
+        // Provide specific guidance based on error
+        let hint = 'Make sure ESP32 is connected to WiFi and enter its IP address';
+        if (err.message.includes('Please provide')) {
+            hint = 'Enter ESP32 IP address (e.g., 10.97.19.31). Check Serial Monitor in Arduino IDE to find it.';
+        } else if (err.message.includes('ECONNREFUSED') || err.message.includes('ETIMEDOUT')) {
+            hint = 'Cannot reach ESP32. Make sure it\'s connected to the same WiFi network as your computer.';
+        }
+
+        res.status(500).json({
+            success: false,
+            error: err.message,
+            hint: hint
+        });
+    }
+});
+
+// Send dispense command
+app.post('/api/hardware/dispense', async (req, res) => {
+    try {
+        const { grainType, weight } = req.body;
+
+        // Validate inputs
+        if (!grainType || !weight) {
+            return res.status(400).json({
+                success: false,
+                error: 'grainType (1=Rice, 2=Dal) and weight (in grams) are required'
+            });
+        }
+
+        if (![1, 2].includes(parseInt(grainType))) {
+            return res.status(400).json({
+                success: false,
+                error: 'grainType must be 1 (Rice) or 2 (Dal)'
+            });
+        }
+
+        if (weight <= 0 || weight > 50000) {
+            return res.status(400).json({
+                success: false,
+                error: 'weight must be between 1 and 50000 grams'
+            });
+        }
+
+        const result = await hardwareService.dispense(parseInt(grainType), parseFloat(weight));
+        res.json(result);
+    } catch (err) {
+        console.error('[Hardware] Dispense error:', err);
+        res.status(500).json({
+            success: false,
+            error: err.message
+        });
+    }
+});
+
+// Get hardware status
+app.get('/api/hardware/status', (req, res) => {
+    try {
+        const status = hardwareService.getStatus();
+        res.json(status);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Manual Tare
+app.post('/api/hardware/tare', async (req, res) => {
+    try {
+        await hardwareService.tare();
+        res.json({ success: true, message: 'Scale tared successfully' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Disconnect from ESP32
+app.post('/api/hardware/disconnect', async (req, res) => {
+    try {
+        await hardwareService.disconnect();
+        res.json({ success: true, message: 'Disconnected from ESP32' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Register ESP32 (Called by Firmware)
+app.post('/api/hardware/register', async (req, res) => {
+    try {
+        const { ip } = req.body;
+        console.log(`[Hardware] Received registration from ESP32 at ${ip}`);
+        if (ip) {
+            await hardwareService.connect(ip);
+        }
+        res.json({ success: true });
+    } catch (err) {
+        console.error('[Hardware] Registration error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ==================== BLUETOOTH HARDWARE ROUTES ====================
+
+// List available Bluetooth/Serial ports
+app.get('/api/hardware/bluetooth/ports', async (req, res) => {
+    try {
+        const { SerialPort } = require('serialport');
+        const ports = await SerialPort.list();
+        const formattedPorts = ports.map(port => ({
+            path: port.path,
+            manufacturer: port.manufacturer,
+            serialNumber: port.serialNumber,
+            friendlyName: port.friendlyName || port.path
+        }));
+        res.json({ success: true, ports: formattedPorts });
+    } catch (err) {
+        console.error('[Bluetooth] Error listing ports:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Connect via Bluetooth
+app.post('/api/hardware/bluetooth/connect', async (req, res) => {
+    try {
+        const { port } = req.body;
+
+        if (!port) {
+            return res.status(400).json({ error: 'Port name required' });
+        }
+
+        // Disconnect existing service
+        if (hardwareService && hardwareService.isConnected) {
+            await hardwareService.disconnect();
+        }
+
+        const result = await bluetoothService.connect(port);
+        hardwareService = bluetoothService; // Switch to Bluetooth service
+
+        res.json({ success: true, type: 'bluetooth', ...result });
+    } catch (err) {
+        console.error('[Bluetooth] Connection error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Connect via WiFi (updated to switch service)
+app.post('/api/hardware/wifi/connect', async (req, res) => {
+    try {
+        const { ip } = req.body;
+
+        if (!ip) {
+            return res.status(400).json({ error: 'IP address required' });
+        }
+
+        // Disconnect existing service
+        if (hardwareService && hardwareService.isConnected) {
+            await hardwareService.disconnect();
+        }
+
+        const result = await wifiService.connect(ip);
+        hardwareService = wifiService; // Switch to WiFi service
+
+        res.json({ success: true, type: 'wifi', ...result });
+    } catch (err) {
+        console.error('[WiFi] Connection error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 const PORT = 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+httpServer.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+
+    // Auto-connect to User's ESP32 IP on startup
+    const DEFAULT_ESP_IP = '10.97.19.31';
+    console.log(`[Startup] Attempting to auto-connect to ESP32 at ${DEFAULT_ESP_IP}...`);
+    hardwareService.connect(DEFAULT_ESP_IP).catch(err => {
+        console.warn(`[Startup] Auto-connect failed (ESP32 might be offline): ${err.message}`);
+    });
+});

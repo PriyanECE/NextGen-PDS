@@ -105,7 +105,7 @@ const Login = () => {
 
             } else {
                 const confidencePercent = data.confidence ? (data.confidence * 100).toFixed(1) : 0;
-                setError(`Face Mismatch (${confidencePercent}%). Try Again.`);
+                setError(data.message || `Face Mismatch (${confidencePercent}%). Try Again.`);
                 setLoading(false);
             }
 

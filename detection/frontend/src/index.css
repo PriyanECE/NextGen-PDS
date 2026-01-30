@@ -1,0 +1,18 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+
+/* Custom Global Styles for Accessibility/Premium Feel */
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #f8fafc;
+  color: #1e293b;
+}
+
+.high-contrast {
+  filter: contrast(125%);
+}
+
+.premium-gradient {
+  background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+}

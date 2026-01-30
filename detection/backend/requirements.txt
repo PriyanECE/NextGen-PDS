@@ -1,0 +1,8 @@
+flask
+flask-cors
+firebase-admin
+opencv-python
+face-recognition
+numpy
+pyserial
+python-dotenv

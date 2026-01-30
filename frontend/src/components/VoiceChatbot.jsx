@@ -142,6 +142,19 @@ const VoiceAssistant = () => {
     }
   };
 
+  // --- SAFETY WATCHDOGS ---
+  // Safety: Prevent "dead speaker" state if synthesis events fail
+  useEffect(() => {
+    let timer;
+    if (isBotSpeaking) {
+      timer = setTimeout(() => {
+        console.warn('[VoiceChatbot] ⚠️ Speech timeout reached - forcing mic on');
+        setIsBotSpeaking(false);
+      }, 15000); // 15s max speech duration before override
+    }
+    return () => clearTimeout(timer);
+  }, [isBotSpeaking]);
+
   // --- CORE FUNCTIONS ---
   const activateAssistant = () => {
     playSound('activate');
@@ -295,19 +308,42 @@ const VoiceAssistant = () => {
     }
   };
 
-  // --- MIC MANAGEMENT ---
+  // --- UNIFIED MIC MANAGEMENT (Prevents Random Pausing) ---
   useEffect(() => {
     if (!browserSupportsSpeechRecognition) return;
 
-    // Restart logic (now works on ALL pages including login)
-    SpeechRecognition.stopListening();
-    const timer = setTimeout(() => {
-      SpeechRecognition.startListening({ continuous: true, language: selectedLang })
-        .catch(e => console.error("Mic Error:", e));
-    }, 100);
+    const startMic = () => {
+      // Don't start if bot is speaking
+      if (isBotSpeaking) return;
 
-    return () => clearTimeout(timer);
-  }, [selectedLang, location.pathname, browserSupportsSpeechRecognition]);
+      console.log(`[VoiceChatbot] 🎤 Starting mic with language: ${selectedLang}`);
+      SpeechRecognition.startListening({
+        continuous: true,
+        language: selectedLang
+      }).catch(e => {
+        if (e.error !== 'not-allowed') {
+          console.error("Mic Start Error:", e);
+        }
+      });
+    };
+
+    // Initial start
+    startMic();
+
+    // WATCHDOG: Browser recognition often stops on its own (silence, mid-speech drops)
+    // We poll to ensure it's still running if the assistant "wants" to be listening
+    const watchdog = setInterval(() => {
+      if (!isBotSpeaking && !SpeechRecognition.listening) {
+        console.log('[VoiceChatbot] 🔄 Watchdog: Restarting idle mic');
+        startMic();
+      }
+    }, 2000);
+
+    return () => {
+      clearInterval(watchdog);
+      SpeechRecognition.stopListening();
+    };
+  }, [selectedLang, isBotSpeaking, browserSupportsSpeechRecognition]);
 
 
   // --- MAIN COMMAND LOOP ---
@@ -392,7 +428,8 @@ const VoiceAssistant = () => {
         if (lowerTranscript.includes(key)) {
           setSelectedLang(code);
           setIsWaitingForLang(false);
-          speak("Language set.", code);
+          // Speak "I am ready" in the selected language
+          speak(t('ready'), code);
           resetTranscript();
           matched = true;
           break;
@@ -417,8 +454,20 @@ const VoiceAssistant = () => {
     // LOGIN PAGE RESTRICTION: Only allow login button commands
     if (isLoginPage && !isAuthenticated) {
       const loginCommands = [
-        { phrase: ['submit login', 'login now', 'next step', 'உள்நுழையவும்', 'लॉगिन करें'], target: 'btn-login-submit' },
-        { phrase: ['verify face', 'face login', 'scan face', 'முகம் சரிபார்', 'चेहरा सत्यापित करें'], target: 'btn-verify-face-login' }
+        {
+          phrase: [
+            'submit login', 'login now', 'next step', 'உள்நுழையவும்', 'लॉगिन करें',
+            'లాగిన్ చేయండి', 'ലോഗിൻ ചെയ്യുക', 'लॉगिन करा'
+          ],
+          target: 'btn-login-submit'
+        },
+        {
+          phrase: [
+            'verify face', 'face login', 'scan face', 'முகம் சரிபார்', 'चेहरा सत्यापित करें',
+            'ముఖ గుర్తింపు', 'ಮುಖದ ಗುರುತಿಸುವಿಕೆ', 'മുഖം വെരിഫൈ ചെയ്യുക'
+          ],
+          target: 'btn-verify-face-login'
+        }
       ];
 
       for (const cmd of loginCommands) {
@@ -483,31 +532,46 @@ const VoiceAssistant = () => {
       // 2. LOGIN PAGE ACTIONS
       // ==========================================
       {
-        phrase: ['submit login', 'login now', 'next step', 'உள்நுழையவும்', 'लॉगिन करें'],
+        phrase: ['submit login', 'login now', 'next step', 'உள்நுழையவும்', 'लॉगिन करें', 'లాగిన్ చేయండి', 'ಲಾಗಿನ್ ಮಾಡಿ', 'ലോഗിൻ ചെയ്യുക'],
         action: 'CLICK', target: 'btn-login-submit'
       },
       {
-        phrase: ['verify face', 'face login', 'scan face', 'முகம் சரிபார்', 'चेहरा सत्यापित करें'],
+        phrase: ['verify face', 'face login', 'scan face', 'முகம் சரிபார்', 'चेहरा सत्यापित करें', 'ముఖం వెరిఫికేషన్', 'ಮುಖದ ಗುರುತಿಸುವಿಕೆ'],
         action: 'CLICK', target: 'btn-verify-face-login'
       },
 
       // ==========================================
       // 3. ADMIN NAV
       // ==========================================
-      { phrase: ['admin dashboard', 'admin'], action: 'NAV', target: '/admin', roles: ['admin'] },
-      { phrase: ['report', 'transaction', 'அறிக்கை', 'रिपोर्ट'], action: 'NAV', target: '/admin?tab=reports', roles: ['admin'] },
+      { phrase: ['admin dashboard', 'admin', 'அட்மின்', 'நிர்வாகி', 'एडमिन', 'పాలన', 'ಆಡಳಿತ', 'അഡ്മിൻ'], action: 'NAV', target: '/admin', roles: ['admin'] },
+      {
+        phrase: [
+          'report', 'transaction', 'அறிக்கை', 'பரிவர்த்தனை', 'रिपोर्ट', 'लेखा',
+          'నివేదిక', 'రిపోర్ట్', 'ವರದಿ', 'ರಿಪೋರ್ಟ್', 'റിപ്പോർട്ട്', 'വിവരങ്ങൾ', 'अहवाल'
+        ],
+        action: 'NAV', target: '/admin?tab=reports', roles: ['admin']
+      },
       { phrase: ['request', 'approval', 'கோரிக்கை', 'अनुरोध'], action: 'NAV', target: '/admin?tab=requests', roles: ['admin'] },
-      { phrase: ['inventory', 'stock', 'இருப்பு', 'स्टॉक'], action: 'NAV', target: '/admin?tab=inventory', roles: ['admin'] },
-      { phrase: ['shop network', 'shop', 'கடைகள்', 'दुकानें'], action: 'NAV', target: '/admin?tab=network', roles: ['admin'] },
+      {
+        phrase: [
+          'inventory', 'stock', 'இருப்பு', 'பங்கு', 'स्टॉक', 'वस्तुसूची',
+          'సరుకు', 'స్టాక్', 'ಸರಕು', 'ದಾಸ್ತಾನು', 'ಸ್ಟೋಕ್', 'ലിസ്റ്റ്', 'साठा'
+        ],
+        action: 'NAV', target: '/admin?tab=inventory', roles: ['admin']
+      },
+      {
+        phrase: ['shop network', 'shop', 'கடைகள்', 'দुकानें', 'దుకాణాలు', 'అಂಗಡಿಗಳು', 'കടകൾ', 'दुकाणे'],
+        action: 'NAV', target: '/admin?tab=network', roles: ['admin']
+      },
 
       // ==========================================
       // 4. ADMIN ACTIONS
       // ==========================================
-      { phrase: ['add rice', 'stock rice'], action: 'CLICK', target: 'btn-add-rice', roles: ['admin'] },
-      { phrase: ['add dhal', 'stock dhal'], action: 'CLICK', target: 'btn-add-dhal', roles: ['admin'] },
-      { phrase: ['next page', 'next'], action: 'CLICK', target: 'btn-next-page', roles: ['admin'] },
-      { phrase: ['previous page'], action: 'CLICK', target: 'btn-prev-page', roles: ['admin'] },
-      { phrase: ['logout', 'sign out'], action: 'CLICK', target: 'btn-admin-logout', roles: ['admin'] },
+      { phrase: ['add rice', 'stock rice', 'அரிசி சேர்', 'चावल जोड़ें', 'బియ్యం చేర్చండి', 'అಕ್ಕಿ ಸೇರಿಸಿ'], action: 'CLICK', target: 'btn-add-rice', roles: ['admin'] },
+      { phrase: ['add dhal', 'stock dhal', 'பருப்பு சேர்', 'दाल जोड़ें', 'పప్పు చేర్చండి', 'ಬೇಳೆ ಸೇರಿಸಿ'], action: 'CLICK', target: 'btn-add-dhal', roles: ['admin'] },
+      { phrase: ['next page', 'next', 'அடுத்தது', 'अगला', 'తర్వాత', 'ಮುಂದೆ', 'ಅടുത്തത്', 'पुढील'], action: 'CLICK', target: 'btn-next-page', roles: ['admin'] },
+      { phrase: ['previous page', 'முந்தைய', 'पिछला', 'మునుపటి', 'ಹಿಂದಿನ', 'പിന്നിലേക്ക്', 'मागे'], action: 'CLICK', target: 'btn-prev-page', roles: ['admin'] },
+      { phrase: ['logout', 'sign out', 'வெளியேறு', 'लॉग அவுட்', 'लॉग आउट', 'లాగ్ అవుట్', 'ಲಾಗ್ ಔಟ್', 'ലോഗ് ഔട്ട്'], action: 'CLICK', target: 'btn-admin-logout', roles: ['admin'] },
 
       // ==========================================
       // 5. EMPLOYEE NAVIGATION
@@ -526,11 +590,17 @@ const VoiceAssistant = () => {
         action: 'NAV', target: '/scan?start=true', roles: ['employee']
       },
       {
-        phrase: ['add beneficiary', 'register'],
+        phrase: [
+          'add beneficiary', 'register', 'பயனாளியைச் சேர்', 'பதிவு செய்',
+          'लाभार्थी जोड़ें', 'నమోదు చేయండి', 'ಹೊಸ ಸದಸ್ಯ', 'പുതിയ ഗുണഭോക്താവ്'
+        ],
         action: 'NAV', target: '/add-beneficiary', roles: ['employee']
       },
       {
-        phrase: ['history', 'log', 'varalaru', 'வரலாறு', 'इतिहास'],
+        phrase: [
+          'history', 'log', 'varalaru', 'வரலாறு', 'इतिहास',
+          'చరిత్ర', 'ಇತಿಹಾಸ', 'ചരിത്രം', 'इतिहास'
+        ],
         action: 'NAV', target: '/history', roles: ['employee']
       },
       {
@@ -542,35 +612,41 @@ const VoiceAssistant = () => {
       // 6. EMPLOYEE ACTIONS
       // ==========================================
       {
-        phrase: ['stop scanner', 'stop camera', 'நிறுத்து', 'रोको'],
+        phrase: ['stop scanner', 'stop camera', 'நிறுத்து', 'கேமராவை நிறுத்து', 'रोको', 'ఆపండి', 'ನಿಲ್ಲಿಸಿ', 'നിർത്തുക', 'थांबवा'],
         action: 'CLICK', target: 'btn-stop-scan', roles: ['employee']
       },
       {
-        phrase: ['verify face', 'verify', 'சரிபார்', 'सत्यापित करें'],
+        phrase: ['verify face', 'verify', 'சரிபார்', 'சரியென்று உறுதி செய்', 'सत्यापित करें', 'ధృవీకరించండి', 'ಖಚಿತಪಡಿಸಿ'],
         action: 'CLICK', target: 'btn-verify-pay', roles: ['employee']
       },
       {
-        phrase: ['confirm dispense', 'dispense', 'வழங்கு', 'वितरण'],
+        phrase: ['confirm dispense', 'dispense', 'வழங்கு', 'பொருட்களை வழங்கு', 'वितरण', 'పంపిణీ', 'ಸರಬರಾಜು', 'വിതരണം'],
         action: 'CLICK', target: 'btn-confirm-dispense', roles: ['employee']
       },
 
       // ==========================================
       // 7. PAYMENT ACTIONS
       // ==========================================
-      { phrase: ['pay cash', 'cash', 'ரொக்கம்', 'नकद'], action: 'CLICK', target: 'btn-select-cash', roles: ['employee', 'admin'] },
-      { phrase: ['pay upi', 'upi', 'online', 'யுபிஐ'], action: 'CLICK', target: 'btn-select-upi', roles: ['employee', 'admin'] },
-      { phrase: ['paid', 'payment done', 'செலுத்தப்பட்டது', 'किया गया'], action: 'CLICK', target: 'btn-upi-paid', roles: ['employee', 'admin'] },
-      { phrase: ['received', 'confirm cash', 'பெறப்பட்டது', 'प्राप्त किया'], action: 'CLICK', target: 'btn-confirm-cash', roles: ['employee', 'admin'] },
+      { phrase: ['pay cash', 'cash', 'ரொக்கம்', 'பணம்', 'नकद', 'पैसे', 'నగదు', 'హణ', 'ಪಾವತಿಸಿ', 'ಪಾವತಿ', 'പണം നൽകുക', 'रोख'], action: 'CLICK', target: 'btn-select-cash', roles: ['employee', 'admin'] },
+      { phrase: ['pay upi', 'upi', 'online', 'யுபிஐ', 'ஆன்லைன்', 'यूपीआई', 'యూపీఐ', 'ಯೂಪಿಐ', 'യുപിഐ', 'ഓൺലൈൻ'], action: 'CLICK', target: 'btn-select-upi', roles: ['employee', 'admin'] },
+      { phrase: ['paid', 'payment done', 'செலுத்தப்பட்டது', 'किया गया', 'చెల్లించబడింది', 'ಪಾವತಿಸಲಾಗಿದೆ', 'പണം നൽകി', 'भरले'], action: 'CLICK', target: 'btn-upi-paid', roles: ['employee', 'admin'] },
+      { phrase: ['received', 'confirm cash', 'பெறப்பட்டது', 'प्राप्त किया', 'స్వీకరించబడింది', 'స్వీకరించారు', 'ಸ್ವೀಕರಿಸಲಾಗಿದೆ', 'സ്വീകരിച്ചു', 'मिळाले'], action: 'CLICK', target: 'btn-confirm-cash', roles: ['employee', 'admin'] },
 
       // ==========================================
       // 8. GENERIC ACTIONS
       // ==========================================
       {
-        phrase: ['go back', 'back', 'previous', 'பின்னால்', 'वापस'],
+        phrase: [
+          'go back', 'back', 'previous', 'பின்னால்', 'திருப்பிச் செல்',
+          'वापस', 'వెనుకకు', 'హಿಂದೆ', 'തിരിച്ചുപോവുക', 'परत जा'
+        ],
         action: 'NAV', target: -1 // Special handling for navigate(-1)
       },
       {
-        phrase: ['logout', 'sign out', 'வெளியேறு', 'लॉग आउट'],
+        phrase: [
+          'logout', 'sign out', 'வெளியேறு', 'लॉग அவுட்', 'लॉग आउट',
+          'లాగ్ అవుట్', 'ಲಾಗ್ ಔಟ್', 'ലോഗ് ഔട്ട്'
+        ],
         action: 'CLICK', target: 'btn-logout', roles: ['employee']
       }
     ];
@@ -587,15 +663,18 @@ const VoiceAssistant = () => {
         // Execute
         if (cmd.action === 'NAV') {
           navigate(cmd.target);
-          speak(cmd.target === -1 ? t('nav_back') : "Okay.");
+          // Only speak for "go back", stay silent for other navigation
+          if (cmd.target === -1) {
+            speak(t('nav_back'));
+          }
         } else if (cmd.action === 'CLICK') {
           const el = document.getElementById(cmd.target);
           if (el) {
             el.click();
-            speak("Okay.");
+            // Silent click - no "Okay" to reduce repetition
           } else {
-            // Fallback: If click fails, maybe we aren't there?
-            speak("I can't do that here.");
+            // Only speak if element not found (error case)
+            speak("Not available here.");
           }
         }
         resetTranscript();
@@ -603,14 +682,18 @@ const VoiceAssistant = () => {
       }
     }
 
-    // 6. BACKEND FALLBACK (NLP) - With Debounce
-    if (transcript.length > 3 && isAwake && !isProcessing && !isBotSpeaking) {
+    // 6. BACKEND FALLBACK (NLP) - With Debounce and Better Filtering
+    // Only trigger if transcript is substantial (>10 chars) to avoid noise
+    if (transcript.length > 10 && isAwake && !isProcessing && !isBotSpeaking && !isWaitingForLang) {
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 
       silenceTimerRef.current = setTimeout(async () => {
+        // Double-check transcript hasn't been reset
+        if (!transcript || transcript.length < 10) return;
+
         console.log("Triggering NLP Fallback for:", transcript);
         setIsProcessing(true);
-        speak(t('processing')); // "Thinking..."
+        // Don't say "Thinking" - just process silently to reduce audio clutter
 
         try {
           const res = await fetch('http://localhost:5000/api/chat', {
@@ -625,17 +708,25 @@ const VoiceAssistant = () => {
 
           if (data.reply) {
             speak(data.reply);
-          } else {
-            speak(t('error_generic'));
+          }
+
+          // 🆕 Execute AI Action if provided
+          if (data.action && data.action.type !== 'NONE') {
+            console.log("[VoiceChatbot] AI Action:", data.action);
+            if (data.action.type === 'NAV') {
+              navigate(data.action.target);
+            } else if (data.action.type === 'CLICK') {
+              const el = document.getElementById(data.action.target);
+              if (el) el.click();
+            }
           }
         } catch (err) {
           console.error("NLP Error:", err);
-          speak(t('error_generic'));
         } finally {
           setIsProcessing(false);
           resetTranscript();
         }
-      }, 1200); // Wait 1.2 seconds of silence (Faster response)
+      }, 2000); // Increased to 2 seconds for better silence detection
     }
 
   }, [transcript, isAwake, isWaitingForLang, selectedLang, navigate, isProcessing, isBotSpeaking]);

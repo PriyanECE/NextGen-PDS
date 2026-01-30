@@ -5,6 +5,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useToast } from '../context/ToastContext';
 import QrScanner from 'qr-scanner';
+import { io } from 'socket.io-client';
+import { Scale } from 'lucide-react';
 
 const ScanDispense = () => {
     const navigate = useNavigate(); // Fix: location was unused, added navigate
@@ -27,6 +29,13 @@ const ScanDispense = () => {
     const [flashOn, setFlashOn] = useState(false);
     const [scanError, setScanError] = useState('');
 
+    // Vision Safety State
+    const [visionStatus, setVisionStatus] = useState({ status: 'safe', message: '' });
+
+    // Scale State
+    const [currentWeight, setCurrentWeight] = useState(0);
+    const [scaleConnected, setScaleConnected] = useState(false);
+
     // Ration State
     const [rationDetails, setRationDetails] = useState({ rice: 0, dhal: 0, cost: 0, maxRice: 0, maxDhal: 0 });
     const [selectedRations, setSelectedRations] = useState({ rice: true, dhal: true });
@@ -37,12 +46,52 @@ const ScanDispense = () => {
     const [paymentMode, setPaymentMode] = useState('Cash'); // Cash | UPI
     const [dispensing, setDispensing] = useState(false);
 
+    // Socket Ref
+    const socketRef = useRef(null);
     const API_URL = 'http://localhost:5000/api';
+    const SOCKET_URL = 'http://localhost:5000';
 
     // Load User
     useEffect(() => {
         const user = localStorage.getItem('user');
         if (user) setCurrentUser(JSON.parse(user));
+
+        // Connect Socket for Scale Updates
+        socketRef.current = io(SOCKET_URL);
+
+        socketRef.current.on('hardware:weight', (data) => {
+            setCurrentWeight(data.current || 0);
+        });
+
+        socketRef.current.on('hardware:connected', () => setScaleConnected(true));
+        socketRef.current.on('hardware:disconnected', () => setScaleConnected(false));
+
+        // Vision Alerts
+        socketRef.current.on('vision:alert', (data) => {
+            const newStatus = data || { status: 'safe', message: '' };
+            setVisionStatus(newStatus);
+
+            // Audio Feedback
+            if (newStatus.status === 'danger') {
+                const utterance = new SpeechSynthesisUtterance("Danger: Hand detected. Please remove hand.");
+                window.speechSynthesis.speak(utterance);
+            } else if (newStatus.status === 'warning') {
+                const utterance = new SpeechSynthesisUtterance("Warning: Please place bag properly.");
+                window.speechSynthesis.speak(utterance);
+            }
+        });
+
+        // Dispense Completion Listener
+        socketRef.current.on('hardware:complete', (data) => {
+            console.log("Dispense Complete!", data);
+            setDispensing(false);
+            addToast('Dispensing Finished!', 'success');
+            setStep(5); // Go to Success Page
+        });
+
+        return () => {
+            if (socketRef.current) socketRef.current.disconnect();
+        };
     }, []);
 
     // AUTO-START SCANNER (For Voice Command)
@@ -268,14 +317,16 @@ const ScanDispense = () => {
 
                 const data = await res.json();
 
-                if (res.ok && data.success && data.match) {
+                if (res.ok && data.success && data.authenticated) {
                     setFaceVerified(true);
                     addToast(`Verified! Confidence: ${(data.confidence * 100).toFixed(1)}%`, 'success');
                     stopScanner(); // Stop camera after success
                     setStep(3.5); // Show success screen
                 } else {
                     setFaceVerified(false);
-                    addToast(data.error || "Face Mismatch. Try Again.", 'error');
+                    // Use the detailed error from backend if available
+                    const errMsg = data.error || data.message || "Face Mismatch. Try Again.";
+                    addToast(errMsg, 'error');
                     // Go back to step 2 after delay
                     setTimeout(() => setStep(2), 2000);
                 }
@@ -329,10 +380,43 @@ const ScanDispense = () => {
             });
 
             if (res.ok) {
-                setTimeout(() => {
-                    setStep(5);
-                    setDispensing(false);
-                }, 2000);
+                // Send hardware dispense command
+                // Determine which grain to dispense (prioritize rice if both selected)
+                let grainType = 1; // 1 = Rice, 2 = Dal
+                let weight = 0;
+
+                if (selectedRations.rice && rationDetails.rice > 0) {
+                    grainType = 1; // Rice
+                    weight = rationDetails.rice * 1000; // Convert kg to grams
+                } else if (selectedRations.dhal && rationDetails.dhal > 0) {
+                    grainType = 2; // Dal
+                    weight = rationDetails.dhal * 1000; // Convert kg to grams
+                }
+
+                // Send to ESP8266
+                try {
+                    const hardwareRes = await fetch(`${API_URL}/hardware/dispense`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ grainType, weight })
+                    });
+
+                    if (!hardwareRes.ok) {
+                        console.warn('[Hardware] Dispense command failed, but transaction recorded');
+                        addToast('Hardware not connected. Please dispense manually.', 'warning');
+                    } else {
+                        addToast('Dispensing started...', 'success');
+                    }
+                } catch (hardwareErr) {
+                    console.error('[Hardware] Error:', hardwareErr);
+                    addToast('Hardware error. Please dispense manually.', 'warning');
+                }
+
+                // Remove fixed timeout - wait for socket event
+                // setTimeout(() => {
+                //    setStep(5);
+                //    setDispensing(false);
+                // }, 2000);
             } else {
                 throw new Error("Validation Failed");
             }
@@ -349,11 +433,30 @@ const ScanDispense = () => {
         setRationDetails({ rice: 0, dhal: 0, cost: 0, maxRice: 0, maxDhal: 0 });
     };
 
+    // Manual Tare Handler
+    const handleTare = async () => {
+        try {
+            console.log("Sending Tare Request...");
+            const res = await fetch(`${API_URL}/hardware/tare`, { method: 'POST' });
+            if (res.ok) {
+                const data = await res.json();
+                addToast(data.message || "Scale Reset to 0g", "success");
+                setCurrentWeight(0);
+            } else {
+                const errData = await res.json();
+                throw new Error(errData.error || "Tare Failed (Backend Error)");
+            }
+        } catch (err) {
+            console.error("Tare Error:", err);
+            addToast(`Tare Failed: ${err.message}`, "error");
+        }
+    };
+
     return (
         <div className="min-h-screen bg-slate-50 p-4 md:p-6 flex flex-col items-center">
 
             {/* Header */}
-            <div className="w-full max-w-6xl flex justify-between items-center mb-6">
+            <div className="w-full max-w-6xl flex justify-between items-center mb-6 gap-4">
                 <div>
                     <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600">
                         Smart PDS Dispenser
@@ -362,9 +465,12 @@ const ScanDispense = () => {
                         {currentUser?.shopLocation} | {currentUser?.name}
                     </p>
                 </div>
-                <button onClick={() => navigate('/history')} className="flex items-center gap-2 px-4 py-2 bg-white text-indigo-600 rounded-xl shadow-sm border border-indigo-50 hover:bg-indigo-50 transition-colors">
-                    <Clock size={18} /> History
-                </button>
+                <div className="flex items-center gap-3">
+
+                    <button onClick={() => navigate('/history')} className="flex items-center gap-2 px-4 py-2 bg-white text-indigo-600 rounded-xl shadow-sm border border-indigo-50 hover:bg-indigo-50 transition-colors">
+                        <Clock size={18} /> History
+                    </button>
+                </div>
             </div>
 
             <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -656,15 +762,49 @@ const ScanDispense = () => {
                                 </div>
                             )}
 
+                            <div className="mb-6 p-4 bg-slate-100 rounded-xl border border-slate-200 flex items-center justify-between">
+                                <div>
+                                    <p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
+                                        Live Scale {scaleConnected ? <span className="text-emerald-600 font-bold">● ONLINE</span> : <span className="text-red-500 font-bold">● OFFLINE</span>}
+                                    </p>
+                                    <p className={`text-3xl font-mono font-bold ${scaleConnected ? 'text-slate-800' : 'text-slate-400'}`}>
+                                        {currentWeight.toFixed(1)} <span className="text-sm text-slate-500">g</span>
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={handleTare}
+                                    className={`px-6 py-3 border rounded-xl font-bold text-sm flex items-center gap-2 transition-all shadow-sm active:scale-95 ${scaleConnected ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50' : 'bg-slate-200 border-slate-200 text-slate-400 opacity-80'}`}
+                                >
+                                    <Scale size={18} /> TARE
+                                </button>
+                            </div>
+
                             <button
                                 id="btn-confirm-dispense"
                                 onClick={handleDispense}
-                                disabled={dispensing}
-                                className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-lg shadow-emerald-500/30 flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                                disabled={dispensing || visionStatus.status !== 'safe'}
+                                className={`w-full py-4 rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 transition-all 
+                                    ${visionStatus.status === 'danger' ? 'bg-red-500 text-white cursor-not-allowed' :
+                                        visionStatus.status === 'warning' ? 'bg-orange-500 text-white cursor-not-allowed' :
+                                            'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/30'} 
+                                    disabled:opacity-70 disabled:cursor-not-allowed`}
                             >
-                                {dispensing ? <RefreshCw className="animate-spin" /> : <ShoppingBag />}
-                                {dispensing ? 'Processing Dispense...' : 'Confirm Payment & Dispense'}
+                                {visionStatus.status === 'danger' ? <AlertTriangle className="animate-pulse" /> :
+                                    visionStatus.status === 'warning' ? <AlertTriangle /> :
+                                        dispensing ? <RefreshCw className="animate-spin" /> : <ShoppingBag />}
+
+                                {visionStatus.status === 'danger' ? 'HAND DETECTED - STOP!' :
+                                    visionStatus.status === 'warning' ? 'PLACE BAG PROPERLY' :
+                                        dispensing ? 'Processing Dispense...' : 'Confirm Payment & Dispense'}
                             </button>
+
+                            {/* Vision Alert Overlay */}
+                            {visionStatus.status !== 'safe' && step === 4 && (
+                                <div className={`mt-4 p-4 rounded-xl flex items-center gap-3 animate-pulse border ${visionStatus.status === 'danger' ? 'bg-red-100 border-red-300 text-red-700' : 'bg-orange-100 border-orange-300 text-orange-800'}`}>
+                                    <AlertTriangle size={24} />
+                                    <span className="font-bold">{visionStatus.message}</span>
+                                </div>
+                            )}
                         </div>
                     )}
 
