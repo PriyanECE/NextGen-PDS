@@ -1379,6 +1379,25 @@ app.get('/api/tts', async (req, res) => {
     }
 });
 
+// --- CHATBOT ENDPOINT ---
+app.post('/api/chat', async (req, res) => {
+    try {
+        const { message, context } = req.body;
+        console.log(`[Chat] Processing: "${message}"`);
+
+        // Use LocalAI service
+        const response = LocalAI.processCommand(message, context);
+
+        res.json(response);
+    } catch (err) {
+        console.error("Chat Error:", err);
+        res.status(500).json({
+            reply: "I'm having trouble connecting to my brain.",
+            action: { type: "NONE" }
+        });
+    }
+});
+
 // --- SOCKET.IO SETUP ---
 io.on('connection', (socket) => {
     console.log('[Socket.IO] Client connected:', socket.id);
