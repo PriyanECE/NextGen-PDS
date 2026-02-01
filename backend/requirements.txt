@@ -1,4 +1,4 @@
-deepface==0.0.79
-edge-tts==6.1.9
-tensorflow==2.13.0
-opencv-python-headless==4.8.1.78
+deepface
+edge-tts
+tensorflow-cpu
+opencv-python-headless
