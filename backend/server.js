@@ -6,34 +6,124 @@ const fs = require('fs'); // Ensure fs is required here
 const { spawn } = require('child_process');
 require('dotenv').config();
 const bcrypt = require('bcryptjs');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-const { createServer } = require('http');
+const LocalAI = require('./services/LocalAI'); // Local NLP Engine
+const { createServer } = require('https'); // Switch to HTTPS
 const { Server } = require('socket.io');
-// Hardware services - WiFi and Bluetooth support
-const wifiService = require('./wifiService');
-const bluetoothService = require('./bluetoothService');
-let hardwareService = wifiService; // Default to WiFi for backward compatibility
+const forge = require('node-forge');
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
 
 const app = express();
-const httpServer = createServer(app);
+
+// --- HTTPS CERTIFICATE GENERATION ---
+const certPath = path.join(__dirname, 'server.cert');
+const keyPath = path.join(__dirname, 'server.key');
+
+let httpsOptions = {};
+
+if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+    console.log("🔒 Loading existing SSL Certificates...");
+    httpsOptions = {
+        key: fs.readFileSync(keyPath),
+        cert: fs.readFileSync(certPath)
+    };
+} else {
+    console.log("⚠️ Generating Self-Signed SSL Certificates...");
+
+    // Simple self-signed cert generation without external library
+    const pki = forge.pki;
+
+    // Generate a keypair
+    const keys = pki.rsa.generateKeyPair(2048);
+
+    // Create a certificate
+    const cert = pki.createCertificate();
+    cert.publicKey = keys.publicKey;
+    cert.serialNumber = '01';
+    cert.validity.notBefore = new Date();
+    cert.validity.notAfter = new Date();
+    cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 1);
+
+    const attrs = [{
+        name: 'commonName',
+        value: 'localhost'
+    }];
+
+    cert.setSubject(attrs);
+    cert.setIssuer(attrs);
+    cert.sign(keys.privateKey);
+
+    // Convert to PEM format
+    const pemCert = pki.certificateToPem(cert);
+    const pemKey = pki.privateKeyToPem(keys.privateKey);
+
+    fs.writeFileSync(certPath, pemCert);
+    fs.writeFileSync(keyPath, pemKey);
+
+    httpsOptions = {
+        key: pemKey,
+        cert: pemCert
+    };
+}
+
+const httpServer = createServer(httpsOptions, app);
+
+// --- GLOBAL ERROR HANDLING ---
+const errorLogPath = path.join(__dirname, 'server_debug.log');
+
+function logError(context, err) {
+    const msg = `[${new Date().toISOString()}] ${context}: ${err.stack || err}\n`;
+    console.error(msg);
+    fs.appendFileSync(errorLogPath, msg);
+}
+
+process.on('uncaughtException', (err) => {
+    logError('UNCAUGHT EXCEPTION', err);
+    // Keep running if possible, but usually advised to restart. For debugging, we keep alive or let it exit cleanly.
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    logError('UNHANDLED REJECTION', reason);
+});
+
 const io = new Server(httpServer, {
     cors: {
-        origin: "http://localhost:5173", // Vite dev server
-        methods: ["GET", "POST"]
+        origin: [
+            "http://localhost:5173",
+            "https://localhost:5173",
+            process.env.FRONTEND_URL
+        ].filter(Boolean),
+        methods: ["GET", "POST"],
+        credentials: true
     }
 });
 
-// Setup Socket.IO event emitter for both hardware services
-const hardwareEventEmitter = (event, data) => {
-    io.emit(event, data);
-    console.log(`[Socket.IO] Emitted: ${event}`, data);
-};
 
-wifiService.setEventEmitter(hardwareEventEmitter);
-bluetoothService.setEventEmitter(hardwareEventEmitter);
 
 app.use(express.json({ limit: '50mb' }));
-app.use(cors());
+app.use(cookieParser());
+
+// CORS Configuration - Support both development and production
+const allowedOrigins = [
+    'http://localhost:5173',
+    'https://localhost:5173',
+    process.env.FRONTEND_URL // Production frontend URL
+].filter(Boolean); // Remove undefined values
+
+app.use(cors({
+    origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+
+        if (allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            console.warn(`Blocked CORS request from origin: ${origin}`);
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true // Allow cookies
+}));
 
 // MongoDB Connection
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/smart-pds';
@@ -169,94 +259,11 @@ const Inventory = mongoose.model('Inventory', InventorySchema);
 const Transaction = mongoose.model('Transaction', TransactionSchema);
 const Shop = mongoose.model('Shop', ShopSchema);
 
-// --- AI CHAT SERVICE (Gemini) ---
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
+// --- AI CHAT SERVICE (LocalAI used instead) ---
+// const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+// const genAI = null;
 
-app.post('/api/chat', async (req, res) => {
-    try {
-        const { message, language } = req.body;
-        if (!message) return res.status(400).json({ error: "Message required" });
-
-        // Check if Gemini is configured
-        if (!genAI || !GEMINI_API_KEY || GEMINI_API_KEY === 'your_gemini_api_key_here') {
-            console.warn('[AI Chat] Gemini API key not configured');
-            return res.json({
-                reply: language === 'ta-IN' ? 'மன்னிக்கவும், AI சேவை கிடைக்கவில்லை.' :
-                    language === 'hi-IN' ? 'क्षमा करें, AI सेवा उपलब्ध नहीं है।' :
-                        language === 'te-IN' ? 'క్షమించండి, AI సేవ అందుబాటులో లేదు.' :
-                            language === 'kn-IN' ? 'ಕ್ಷಮಿಸಿ, AI ಸೇವೆ ಲಭ್ಯವಿಲ್ಲ.' :
-                                language === 'ml-IN' ? 'ക്ഷമിക്കണം, AI സേവനം ലഭ്യമല്ല.' :
-                                    language === 'mr-IN' ? 'क्षमस्व, AI सेवा उपलब्ध नाही.' :
-                                        'Sorry, AI service is not available.'
-            });
-        }
-
-        const model = genAI.getGenerativeModel({
-            model: "gemini-2.0-flash",
-            generationConfig: { responseMimeType: "application/json" }
-        });
-
-        const prompt = `
-        You are a smart, helpful assistant for the "Smart PDS" (Public Distribution System) website. 
-        The website has these pages/actions:
-        - Home Page: /home
-        - Login Page: /
-        - Admin Dashboard Tabs: /admin?tab=reports, /admin?tab=requests, /admin?tab=inventory, /admin?tab=network
-        - Scan & Dispense: /scan?start=true
-        - Common Button IDs (for CLICK action):
-            - btn-login-submit (Login button)
-            - btn-verify-face-login (Face login)
-            - btn-stop-scan (Stop camera)
-            - btn-verify-pay (Verify face for dispense)
-            - btn-confirm-dispense (Dispense grains)
-            - btn-select-cash (Cash payment)
-            - btn-select-upi (UPI payment)
-            - btn-upi-paid (UPI confirmation)
-            - btn-add-rice/btn-add-dhal (Stock entry)
-            - btn-logout (Logout)
-        - Language Codes: en-IN, ta-IN, hi-IN, te-IN, kn-IN, ml-IN, mr-IN
-
-        The user is speaking in: ${language || 'en-IN'}.
-        User message: "${message}"
-
-        INSTRUCTIONS:
-        1. Classify the intent. If it's a navigational command, use action type "NAV". If it's a button action, use action type "CLICK".
-        2. Respond STRICTLY in this JSON format:
-        { 
-          "reply": "Brief verbal response in the user's language", 
-          "action": { "type": "NAV|CLICK|NONE", "target": "URL or ElementID" } 
-        }
-        3. Keep the "reply" extremely short (under 2 sentences).
-        4. CRITICAL: Always use the user's native script in the "reply" (Tamil, Hindi, etc.).
-        `;
-
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const text = response.text();
-
-        try {
-            const parsed = JSON.parse(text);
-            res.json(parsed);
-        } catch (e) {
-            // Fallback for non-JSON or malformed responses
-            res.json({ reply: text, action: { type: "NONE" } });
-        }
-    } catch (err) {
-        console.error("AI Chat Error:", err);
-        // Return language-specific error message
-        const { language } = req.body;
-        res.json({
-            reply: language === 'ta-IN' ? 'மன்னிக்கவும், புரியவில்லை.' :
-                language === 'hi-IN' ? 'क्षमा करें, समझ नहीं आया।' :
-                    language === 'te-IN' ? 'క్షమించండి, అర్థం కాలేదు.' :
-                        language === 'kn-IN' ? 'ಕ್ಷಮಿಸಿ, ಅರ್ಥವಾಗಲಿಲ್ಲ.' :
-                            language === 'ml-IN' ? 'ക്ഷമിക്കണം, മനസ്സിലായില്ല.' :
-                                language === 'mr-IN' ? 'क्षमस्व, समजले नाही.' :
-                                    'Sorry, I did not understand.'
-        });
-    }
-});
+// [Duplicate /api/chat (Gemini) removed. Using LocalAI route below.]
 
 // Routes
 
@@ -393,12 +400,31 @@ app.post('/api/auth/verify-employee-face', async (req, res) => {
         if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
         // 1. Prepare Stored Image
+        // 1. Prepare Stored Image
         let storedImagePath = path.join(uploadsDir, `auth_stored_${user._id}.jpg`);
         try {
             let imgData = user.image;
-            if (imgData.includes('uploads') || (imgData.includes('.jpg') && !imgData.startsWith('data:'))) {
-                storedImagePath = path.isAbsolute(imgData) ? imgData : path.join(__dirname, imgData);
+
+            // Check if it's a URL (e.g., http://localhost:5000/uploads/admin_face.png)
+            if (imgData.startsWith('http')) {
+                const urlObj = new URL(imgData);
+                const filename = path.basename(urlObj.pathname);
+                storedImagePath = path.join(uploadsDir, filename);
+
+                if (!fs.existsSync(storedImagePath)) {
+                    console.warn(`[Auth] Warning: File from URL not found locally: ${storedImagePath}`);
+                    // Fallback: If not found, maybe it's just a filename stored, or we need to try downloading (not implemented yet, assuming local)
+                }
+            }
+            // Check if it's a local path or filename (legacy/direct path)
+            else if (imgData.includes('uploads') || (imgData.includes('.jpg') && !imgData.startsWith('data:'))) {
+                // Clean up any potential URL-like prefixes if they exist (rare case but good to be safe)
+                let cleanPath = imgData;
+                if (cleanPath.startsWith('file://')) cleanPath = fileURLToPath(cleanPath);
+
+                storedImagePath = path.isAbsolute(cleanPath) ? cleanPath : path.join(__dirname, cleanPath);
             } else {
+                // Base64 data
                 if (imgData.includes(",")) imgData = imgData.split(',')[1];
                 fs.writeFileSync(storedImagePath, Buffer.from(imgData, 'base64'));
             }
@@ -1006,19 +1032,8 @@ app.post('/api/dispense', async (req, res) => {
             location: transactionLocation
         });
 
-        // 4. TRIGGER ESP32 (Hardware Integration)
-        // Send command to ESP32 IP (Example: 192.168.4.1)
-        // We use a fire-and-forget or short timeout approach
-        try {
-            // Mocking the call for now. In production, use axios/fetch to ESP32 IP.
-            console.log(`📡 Sending Command to ESP32: Dispense ${JSON.stringify(items)}`);
-            // await axios.post('http://192.168.4.1/control', { items });
-        } catch (hwErr) {
-            console.error("Hardware Trigger Failed:", hwErr.message);
-            // We still return success to UI, but maybe log a warning
-        }
 
-        res.json({ success: true, message: "Dispense Logged & Hardware Triggered" });
+        res.json({ success: true, message: "Dispense Logged" });
 
     } catch (err) {
         console.error(err);
@@ -1062,22 +1077,41 @@ app.get('/api/reports', async (req, res) => {
 // SEEDING
 const seedManager = async () => {
     const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash('123', salt);
-
-    const exists = await Employee.findOne({ role: 'manager' });
-    if (exists) {
-        // Update password to hashed version to ensure login works
-        exists.password = hashedPassword;
-        await exists.save();
-        console.log("✅ Updated Manager Password (Hashed)");
-    } else {
-        await Employee.create({
+    // 1. Define Users to Seed (with Face Data)
+    const users = [
+        {
             name: 'Supervisor',
             email: 'admin@pds.com',
-            password: hashedPassword,
-            role: 'manager'
-        });
-        console.log("✅ Seeded Manager: admin@pds.com");
+            role: 'manager',
+            image: 'http://localhost:5000/uploads/admin_face.png',
+            shopLocation: 'Main Office'
+        },
+        {
+            name: 'Mini User',
+            email: 'mini@gmail.com',
+            role: 'employee',
+            image: 'http://localhost:5000/uploads/admin_face.png',
+            shopLocation: 'Coimbatore North' // Assigned Example
+        }
+    ];
+
+    for (const u of users) {
+        const hashedPassword = await bcrypt.hash('password123', 10);
+
+        // Upsert (Update if exists, Insert if new)
+        await Employee.findOneAndUpdate(
+            { email: u.email },
+            {
+                name: u.name,
+                password: hashedPassword,
+                role: u.role,
+                image: u.image,
+                shopLocation: u.shopLocation,
+                status: 'active'
+            },
+            { upsert: true, new: true }
+        );
+        console.log(`✅ Seeded/Updated User: ${u.email} (with Face Data)`);
     }
 };
 
@@ -1173,237 +1207,174 @@ app.get('/api/reports', async (req, res) => {
     }
 });
 // --- AI ASSISTANT ---
-app.post('/api/ai/chat', async (req, res) => {
+// --- AI ASSISTANT (UPGRADED) ---
+app.post('/api/chat', async (req, res) => {
     try {
-        const { message, language = 'en-US', role = 'employee' } = req.body;
-        console.log(`[AI Chat] Message: "${message}", Lang: ${language}, Role: ${role}`);
+        const { message, language = 'en-US', context = {} } = req.body;
+        const role = context.role || 'guest';
+        const page = context.page || '/';
 
-        // 1. Gather Context
+        console.log(`[AI Chat] Msg: "${message}", Role: ${role}, Page: ${page}`);
+
+        // 1. Context Gathering
         const inventory = await Inventory.findOne({ type: 'daily_stock' });
         const shopCount = await Shop.countDocuments();
         const pendingRequests = await BeneficiaryRequest.countDocuments({ status: 'Pending' });
 
-        const context = {
-            inventory: inventory ? {
-                rice: inventory.rice.total - inventory.rice.dispensed,
-                dhal: inventory.dhal.total - inventory.dhal.dispensed
-            } : { rice: 0, dhal: 0 },
+        const systemContext = {
+            rice: (inventory?.rice?.total - inventory?.rice?.dispensed) || 0,
+            dhal: (inventory?.dhal?.total - inventory?.dhal?.dispensed) || 0,
             shops: shopCount,
             pending: pendingRequests
         };
 
         // 2. AI Logic (Gemini)
-        if (process.env.GEMINI_API_KEY) {
-            const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-            const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+        // 2. AI Logic (Local NLP Engine)
+        // 100% Offline, Deterministic, Fast.
+        const aiResponse = LocalAI.processCommand(message, {
+            role,
+            page,
+            data: systemContext
+        });
 
-            const prompt = `
-            You are the "Smart PDS" Assistant.
-            
-            [CONTEXT]
-            - User Role: ${role}
-            - Current Language Preference: ${language} (Strictly respond in this language)
-            - Stock: Rice: ${context.inventory.rice}kg, Dhal: ${context.inventory.dhal}kg
-            - Shops: ${context.shops}
-            - Pending Requests: ${context.pending}
-
-            You are the "Smart PDS Assistant", a highly intelligent multilingual voice assistant.
-            
-            [CRITICAL: LANGUAGE & SCRIPT]
-            1. **DETECT LANGUAGE**: Identify the language of the User Query.
-               - Supported: English, Tamil (தமிழ்), Hindi (हिंदी), Telugu (తెలుగు), Kannada (कन्नड़), Malayalam (മലയാളം).
-            2. **RESPOND IN NATIVE SCRIPT**: 
-               - If user speaks Tamil, reply in Tamil script (e.g. "வணக்கம்").
-               - If user speaks Hindi, reply in Hindi script (e.g. "नमस्ते").
-               - If user speaks "Tanglish" or mixed, reply in mixed style.
-            
-            [ROLE ENFORCEMENT]
-            - User Role: "${role}"
-            - **ADMIN**: Access to /admin (Dashboard), /admin?tab=reports (Reports). BLOCKED from /scan, /add-beneficiary.
-            - **EMPLOYEE**: Access to /scan, /history, /add-beneficiary. BLOCKED from /admin.
-            
-            [INTENT CLASSIFICATION]
-            - **Fuzzy Matching**: If user says something *similar* to a command, execute it (e.g., "purana hisab" -> History).
-            - **Ignore Fillers**: Ignore polite suffixes like "ji", "andi", "avargale", "saar", "please". Focus on KEYWORDS.
-            - **Navigation**: Return JSON {"action": "NAVIGATION", "target": "URL"}
-            - **Click**: Return JSON {"action": "CLICK", "target": "ID"}
-            - **Answer**: Return JSON {"text": "Native answer"}
-            - **Hardware**: If asking for status -> {"text": "Check dashboard for weight/stock."}
-
-            [ROUTE & ACTION MAP]
-            [ROUTE & ACTION MAP - MULTILINGUAL SUPPORT]
-            
-            1. **HOME / BACK** 
-               - Hindi: "Ghar", "Wapas", "Peeche", "Main menu"
-               - Tamil: "Veedu", "Pinnala", "Thirumba po", "Mugappu"
-               - Telugu: "Intiki", "Venakki", "Home ki vellu"
-               - Kannada: "Mane", "Hinde", "Home page"
-               - Malayalam: "Veettil", "Thirike", "Mumbilekku"
-               *(Action: /home)*
-
-            2. **SCAN / DISPENSE (Employee Only)**
-               - Hindi: "Ration do", "Scan karo", "Chalu karo", "Grahak aaya", "Rice do"
-               - Tamil: "Ration podu", "Scan pannu", "Arisi podu", "Start camera", "Customer"
-               - Telugu: "Ration ivvu", "Scan cheyyi", "Biyyam poyi", "Customer vacharu"
-               - Kannada: "Ration kodi", "Scan maadi", "Akki haki", "Start maadi"
-               - Malayalam: "Ration nalku", "Scan cheyhu", "Ari idu", "Thudanguka"
-               *(Action: /scan)*
-
-            3. **ADD / UPDATE MEMBER (Employee Only)**
-               - Hindi: "Naya member", "Naam jodo", "Card badlo", "Update karo"
-               - Tamil: "Pudhu aalu", "Member ser", "Peyar matru", "Update pannu"
-               - Telugu: "Kotha member", "Peru chersu", "Update cheyyi"
-               - Kannada: "Hosa sadsya", "Hesarannu serisi", "Card update"
-               - Malayalam: "Puthiya angam", "Angathe cherkkuka", "Update cheyyuka"
-               *(Action: /add-beneficiary?mode=add (or mode=update if "change/badlo"))*
-
-            4. **HISTORY / TRANSACTIONS (Employee Only)**
-               - Hindi: "Purana hisab", "Len den", "Pichla record", "History dikhao"
-               - Tamil: "Varalaru", "Padhaya kanakku", "Transactions kaatu", "History"
-               - Telugu: "Patha lekkalu", "Charitra", "Transactions chupinchu"
-               - Kannada: "Haleya lekka", "Itihasa", "Transactions torsi"
-               - Malayalam: "Pazhaya charithram", "Transactions kanikkuka"
-               *(Action: /history)*
-
-            5. **REPORTS / ADMIN (Admin Only)**
-               - Hindi: "Report dikhao", "Aaj ka hisab", "Total kitna hua"
-               - Tamil: "Indha maadham kanakku", "Report kaatu", "Motha kanakku"
-               - Telugu: "Report chupinchu", "Ee roju lekkalu", "Total entha"
-               - Kannada: "Report torsi", "Ivathiina lekka"
-               - Malayalam: "Report kanikkuka", "Innathe kanakku"
-               *(Action: /admin?tab=reports)*
-
-            6. **HARDWARE STATUS**
-               - All Langs: "Machine status", "Weight check", "Dispenser check", "System okay?"
-               *(Action: {"text": "Hardware Status: [Check dashboard weight/stock]"})*
-
-            7. **LOGOUT**
-               - All Langs: "Bahar jao", "Velipad", "Log out", "Sign out"
-               *(Action: CLICK "btn-logout")*
-
-            [STRICT RULES]
-            - Do NOT hallucinate targets. Use ONLY the map above.
-            - If Employee asks for Admin -> {"text": "Access Denied. You are an employee."}
-            - If Admin asks for Scanner -> {"text": "Please use Employee login for scanning."}
-
-            User Query: "${message}"
-            Language Hint: User likely spoke in ${req.body.language || 'English'}
-            `;
-
-            const result = await model.generateContent(prompt);
-            const response = await result.response;
-            const text = response.text();
-
-            // Try parsing JSON actions
-            try {
-                const cleaned = text.replace(/```json|```/g, '').trim();
-                if (cleaned.startsWith('{')) {
-                    const jsonAction = JSON.parse(cleaned);
-                    return res.json(jsonAction);
-                }
-            } catch (e) {
-                // Not JSON, just text
-            }
-
-            return res.json({ text: text });
-        }
-
-        // 3. Fallback Logic (Keyword Matching) if no AI Key or Error
-        const lower = message.toLowerCase();
-
-        // FAILSAFE NAVIGATION (Works without AI)
-        if (lower.includes('back') || lower.includes('return') || lower.includes('previous')) {
-            return res.json({ action: "NAVIGATION", target: "BACK" });
-        }
-
-        // Employee Routes (Blocked for Admin)
-        if (role !== 'admin') {
-            if (lower.includes('history') || lower.includes('report') || lower.includes('transactions')) {
-                return res.json({ action: "NAVIGATION", target: "/history?tab=transactions" });
-            }
-            if (lower.includes('request')) { // "my requests"
-                return res.json({ action: "NAVIGATION", target: "/history?tab=requests" });
-            }
-            if ((lower.includes('next') && lower.includes('customer')) || lower.includes('scan') || lower.includes('qr') || lower.includes('camera')) {
-                return res.json({ action: "NAVIGATION", target: "/scan" });
-            }
-            if (lower.includes('payment') || lower.includes('pay')) {
-                return res.json({ action: "NAVIGATION", target: "/payment" });
-            }
-            if (lower.includes('register') || lower.includes('add') || lower.includes('beneficiary')) { // "add beneficiary"
-                if (lower.includes('update') || lower.includes('edit') || lower.includes('change')) {
-                    return res.json({ action: "NAVIGATION", target: "/add-beneficiary?mode=update" });
-                }
-                return res.json({ action: "NAVIGATION", target: "/add-beneficiary?mode=add" });
-            }
-        }
-
-        // Admin Routes (Blocked for Employee)
-        if (role === 'admin') {
-            // Block Employee-only keywords
-            if (lower.includes('history') || lower.includes('transactions')) {
-                return res.json({ text: "Please use 'Reports' for admin history." });
-            }
-            if (lower.includes('report')) {
-                return res.json({ action: "NAVIGATION", target: "/admin?tab=reports" });
-            }
-            if (lower.includes('admin') || lower.includes('dashboard') || lower.includes('stock')) {
-                return res.json({ action: "NAVIGATION", target: "/admin" });
-            }
-        } else {
-            // If employee asks for admin
-            if (lower.includes('admin')) {
-                return res.json({ text: "Access Denied. Admin only." });
-            }
-        }
-
-        if (lower.includes('home') || lower.includes('menu')) {
-            return res.json({ action: "NAVIGATION", target: "/home" });
-        }
-        if (lower.includes('help') || lower.includes('commands') || lower.includes('guide')) {
-            return res.json({ action: "NAVIGATION", target: "/help" });
-        }
-
-        let reply = "I am the Smart PDS Assistant. (AI Offline)";
-
-        if (language.startsWith('ta')) {
-            if (lower.includes('rice') || lower.includes('அரிசி')) reply = `தற்போதைய அரிசி இருப்பு: ${context.inventory.rice} கிலோ.`;
-            else if (lower.includes('shop') || lower.includes('கடை')) reply = `மொத்தம் ${context.shops} நியாய விலைக் கடைகள் உள்ளன.`;
-            else reply = "மன்னிக்கவும், அரிசி அல்லது கடைகள் பற்றி கேட்கவும்.";
-        } else {
-            if (lower.includes('rice') || lower.includes('stock')) reply = `Current Rice Stock is ${context.inventory.rice} kg.`;
-            else if (lower.includes('shop')) reply = `There are ${context.shops} active ration shops.`;
-            else reply = "I can answer questions about Stock, Shops, or Navigate you.";
-        }
-
-        res.json({ text: reply });
+        console.log(`[LocalAI] Intent: ${aiResponse.action?.type} -> ${aiResponse.action?.target}`);
+        return res.json(aiResponse);
 
     } catch (err) {
-        console.error("AI Error:", err);
-        res.status(500).json({ error: "AI Service Failed", details: err.message });
+        console.error("AI Service Error (Global):", err.message);
+
+        try {
+            const detailedError = err.response ? JSON.stringify(err.response, null, 2) : err.message;
+            fs.appendFileSync(path.join(__dirname, 'server_debug.log'), `\n[${new Date().toISOString()}] GLOBAL ERROR:\n${detailedError}\n`);
+        } catch (logErr) {
+            console.error("Failed to write to log file:", logErr.message);
+        }
+
+        res.status(500).json({ error: "Service Error" });
     }
 });
-// --- TTS PROXY ---
-app.get('/api/tts', (req, res) => {
+
+// --- PERSISTENT TTS SERVICE ---
+class TTSService {
+    constructor() {
+        this.process = null;
+        this.queue = [];
+        this.buffer = '';
+        this.start();
+    }
+
+    start() {
+        console.log("[TTSService] Starting persistent Python process...");
+        const scriptPath = path.join(__dirname, 'tts_service.py');
+        this.process = spawn('python', [scriptPath, '--persistent'], {
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+
+        this.process.stdout.on('data', (data) => this.handleOutput(data));
+        this.process.stderr.on('data', (data) => console.error(`[TTSService STDERR] ${data}`));
+
+        this.process.on('close', (code) => {
+            if (code !== 0 && code !== null) {
+                console.error(`[TTSService] Process exited with code ${code}. Restarting in 1s...`);
+                setTimeout(() => this.start(), 1000);
+            }
+        });
+
+        this.process.on('error', (err) => {
+            console.error(`[TTSService] Failed to start: ${err.message}`);
+        });
+    }
+
+    handleOutput(data) {
+        this.buffer += data.toString();
+        // Split by newline, handle multiple JSON objects in one chunk
+        let parts = this.buffer.split('\n');
+        this.buffer = parts.pop(); // Keep the last incomplete part
+
+        for (const line of parts) {
+            if (!line.trim()) continue;
+            try {
+                const response = JSON.parse(line);
+
+                // Handle initialization/status messages
+                if (response.status === 'ready') {
+                    console.log(`[TTSService] Ready and Listening`);
+                    continue;
+                }
+
+                // Handle Verification Response
+                const pending = this.queue.shift();
+                if (pending) {
+                    if (response.status === 'success') {
+                        pending.resolve(response.file);
+                    } else {
+                        pending.reject(new Error(response.error || "Unknown Error"));
+                    }
+                } else {
+                    console.warn("[TTSService] Received response but no pending request:", response);
+                }
+
+            } catch (e) {
+                console.error("[TTSService] JSON Parse Error:", e.message, "Line:", line);
+            }
+        }
+    }
+
+    async generate(text, lang, outputFile) {
+        return new Promise((resolve, reject) => {
+            if (!this.process || this.process.killed) {
+                return reject(new Error("TTSService is not running"));
+            }
+
+            // Push to queue
+            this.queue.push({ resolve, reject });
+
+            // Send to Python
+            const payload = JSON.stringify({ text, lang, output_file: outputFile }) + '\n';
+            this.process.stdin.write(payload);
+        });
+    }
+}
+
+const ttsService = new TTSService();
+
+// --- TTS SERVICE (EDGE TTS) ---
+app.get('/api/tts', async (req, res) => {
     try {
         const { text, lang } = req.query;
-        console.log(`[TTS Proxy] Request for: "${text}" in ${lang}`);
         if (!text || !lang) return res.status(400).json({ error: "Text and lang required" });
 
-        const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=${lang.split('-')[0]}&client=tw-ob`;
+        // Use first 50 chars for log to avoid noise
+        const logText = text.length > 50 ? text.substring(0, 50) + '...' : text;
+        console.log(`[TTS] Request: "${logText}" (${lang})`);
 
-        const https = require('https');
-        https.get(ttsUrl, (response) => {
-            if (response.statusCode !== 200) {
-                return res.status(response.statusCode).json({ error: "Upstream TTS failure" });
-            }
-            res.setHeader('Content-Type', 'audio/mpeg');
-            response.pipe(res);
-        }).on('error', (err) => {
-            console.error("TTS Proxy Error:", err);
-            res.status(500).json({ error: "Failed to fetch TTS" });
-        });
+        // Create unique filename based on text hash/timestamp to cache
+        // Simple hash to avoid huge filenames
+        const crypto = require('crypto');
+        const hash = crypto.createHash('md5').update(text + lang).digest('hex');
+        const filename = `tts_${hash}.mp3`;
+        const uploadsDir = path.join(__dirname, 'uploads');
+        if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+        const outputPath = path.join(uploadsDir, filename);
+
+        // Check if cached
+        if (fs.existsSync(outputPath)) {
+            console.log("[TTS] Serving Cached");
+            return res.sendFile(outputPath);
+        }
+
+        // Generate via Persistent Service
+        await ttsService.generate(text, lang, outputPath);
+
+        if (fs.existsSync(outputPath)) {
+            res.sendFile(outputPath);
+        } else {
+            throw new Error("File not created after success signal");
+        }
+
     } catch (err) {
+        console.error("TTS Error:", err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -1413,218 +1384,18 @@ io.on('connection', (socket) => {
     console.log('[Socket.IO] Client connected:', socket.id);
 
     // --- Vision System Events ---
-    socket.on('vision:update', async (data) => {
-        // Broadcast to frontend
-        io.emit('vision:alert', data);
-
-        // SAFETY INTERLOCK: If DANGER (Hand Detected), STOP DISPENSING
-        if (data.status === 'danger') {
-            try {
-                // Only log if we haven't logged recently to avoid spam
-                // console.log('[Safety] Hand Detected! Stopping Dispense...');
-                await hardwareService.stop();
-            } catch (err) {
-                // Ignore errors if already stopped
-            }
-        }
-    });
+    // Broadcast to frontend
+    io.emit('vision:alert', data);
 
     socket.on('disconnect', () => {
         console.log('[Socket.IO] Client disconnected:', socket.id);
     });
 });
 
-// Setup hardware service event emitter
-hardwareService.setEventEmitter((event, data) => {
-    io.emit(event, data);
-});
 
-// --- HARDWARE INTEGRATION ENDPOINTS ---
-
-// Connect to ESP32
-app.post('/api/hardware/connect', async (req, res) => {
-    try {
-        const { ip } = req.body; // IP address of ESP32 (e.g., 10.97.19.31)
-        const result = await hardwareService.connect(ip);
-        res.json(result);
-    } catch (err) {
-        console.error('[Hardware] Connection error:', err);
-
-        // Provide specific guidance based on error
-        let hint = 'Make sure ESP32 is connected to WiFi and enter its IP address';
-        if (err.message.includes('Please provide')) {
-            hint = 'Enter ESP32 IP address (e.g., 10.97.19.31). Check Serial Monitor in Arduino IDE to find it.';
-        } else if (err.message.includes('ECONNREFUSED') || err.message.includes('ETIMEDOUT')) {
-            hint = 'Cannot reach ESP32. Make sure it\'s connected to the same WiFi network as your computer.';
-        }
-
-        res.status(500).json({
-            success: false,
-            error: err.message,
-            hint: hint
-        });
-    }
-});
-
-// Send dispense command
-app.post('/api/hardware/dispense', async (req, res) => {
-    try {
-        const { grainType, weight } = req.body;
-
-        // Validate inputs
-        if (!grainType || !weight) {
-            return res.status(400).json({
-                success: false,
-                error: 'grainType (1=Rice, 2=Dal) and weight (in grams) are required'
-            });
-        }
-
-        if (![1, 2].includes(parseInt(grainType))) {
-            return res.status(400).json({
-                success: false,
-                error: 'grainType must be 1 (Rice) or 2 (Dal)'
-            });
-        }
-
-        if (weight <= 0 || weight > 50000) {
-            return res.status(400).json({
-                success: false,
-                error: 'weight must be between 1 and 50000 grams'
-            });
-        }
-
-        const result = await hardwareService.dispense(parseInt(grainType), parseFloat(weight));
-        res.json(result);
-    } catch (err) {
-        console.error('[Hardware] Dispense error:', err);
-        res.status(500).json({
-            success: false,
-            error: err.message
-        });
-    }
-});
-
-// Get hardware status
-app.get('/api/hardware/status', (req, res) => {
-    try {
-        const status = hardwareService.getStatus();
-        res.json(status);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Manual Tare
-app.post('/api/hardware/tare', async (req, res) => {
-    try {
-        await hardwareService.tare();
-        res.json({ success: true, message: 'Scale tared successfully' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Disconnect from ESP32
-app.post('/api/hardware/disconnect', async (req, res) => {
-    try {
-        await hardwareService.disconnect();
-        res.json({ success: true, message: 'Disconnected from ESP32' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Register ESP32 (Called by Firmware)
-app.post('/api/hardware/register', async (req, res) => {
-    try {
-        const { ip } = req.body;
-        console.log(`[Hardware] Received registration from ESP32 at ${ip}`);
-        if (ip) {
-            await hardwareService.connect(ip);
-        }
-        res.json({ success: true });
-    } catch (err) {
-        console.error('[Hardware] Registration error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// ==================== BLUETOOTH HARDWARE ROUTES ====================
-
-// List available Bluetooth/Serial ports
-app.get('/api/hardware/bluetooth/ports', async (req, res) => {
-    try {
-        const { SerialPort } = require('serialport');
-        const ports = await SerialPort.list();
-        const formattedPorts = ports.map(port => ({
-            path: port.path,
-            manufacturer: port.manufacturer,
-            serialNumber: port.serialNumber,
-            friendlyName: port.friendlyName || port.path
-        }));
-        res.json({ success: true, ports: formattedPorts });
-    } catch (err) {
-        console.error('[Bluetooth] Error listing ports:', err.message);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Connect via Bluetooth
-app.post('/api/hardware/bluetooth/connect', async (req, res) => {
-    try {
-        const { port } = req.body;
-
-        if (!port) {
-            return res.status(400).json({ error: 'Port name required' });
-        }
-
-        // Disconnect existing service
-        if (hardwareService && hardwareService.isConnected) {
-            await hardwareService.disconnect();
-        }
-
-        const result = await bluetoothService.connect(port);
-        hardwareService = bluetoothService; // Switch to Bluetooth service
-
-        res.json({ success: true, type: 'bluetooth', ...result });
-    } catch (err) {
-        console.error('[Bluetooth] Connection error:', err.message);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Connect via WiFi (updated to switch service)
-app.post('/api/hardware/wifi/connect', async (req, res) => {
-    try {
-        const { ip } = req.body;
-
-        if (!ip) {
-            return res.status(400).json({ error: 'IP address required' });
-        }
-
-        // Disconnect existing service
-        if (hardwareService && hardwareService.isConnected) {
-            await hardwareService.disconnect();
-        }
-
-        const result = await wifiService.connect(ip);
-        hardwareService = wifiService; // Switch to WiFi service
-
-        res.json({ success: true, type: 'wifi', ...result });
-    } catch (err) {
-        console.error('[WiFi] Connection error:', err.message);
-        res.status(500).json({ error: err.message });
-    }
-});
+// --- SOCKET.IO DISCONNECT ---
 
 const PORT = 5000;
 httpServer.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
-
-    // Auto-connect to User's ESP32 IP on startup
-    const DEFAULT_ESP_IP = '10.97.19.31';
-    console.log(`[Startup] Attempting to auto-connect to ESP32 at ${DEFAULT_ESP_IP}...`);
-    hardwareService.connect(DEFAULT_ESP_IP).catch(err => {
-        console.warn(`[Startup] Auto-connect failed (ESP32 might be offline): ${err.message}`);
-    });
 });

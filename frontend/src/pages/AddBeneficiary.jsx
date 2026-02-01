@@ -1,55 +1,37 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { User, CreditCard, Users, Save, ArrowLeft, Plus, Trash2, MapPin, Camera, Upload, X, Search, Loader2 } from 'lucide-react';
+import { Camera, User, Users, MapPin, ArrowLeft, CheckCircle, XCircle } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
+import Button from '../components/ui/Button';
+import Card from '../components/ui/Card';
+import Input from '../components/ui/Input';
+import API_URL from '../config/api';
 
 const AddBeneficiary = () => {
-    // ... setup ...
     const navigate = useNavigate();
+    const location = useLocation();
     const { addToast } = useToast();
-    const [currentUser, setCurrentUser] = useState(null);
-    const API_URL = 'http://localhost:5000/api';
 
+
+    const [currentUser, setCurrentUser] = useState(null);
     const [shops, setShops] = useState([]);
 
-    useEffect(() => {
-        // ... user load ...
-        const user = localStorage.getItem('user');
-        if (user) {
-            const parsedUser = JSON.parse(user);
-            setCurrentUser(parsedUser);
-            setFormData(prev => ({ ...prev, assignedShop: parsedUser.shopLocation || '' }));
-        } else {
-            navigate('/');
-        }
-        fetchShops();
-    }, [navigate]);
-
-    const fetchShops = async () => {
-        try {
-            const res = await fetch(`${API_URL}/shops`);
-            const data = await res.json();
-            setShops(data);
-        } catch (err) { addToast("Failed to fetch shops", 'error'); }
-    };
-
-    const location = React.useLocation ? React.useLocation() : { search: '' };
-
-    // Parse initial mode from URL
+    // Parse Initial Mode
     const getInitialMode = () => {
         const params = new URLSearchParams(location.search);
         return params.get('mode') === 'update' ? 'update' : 'add';
     };
 
-    const [mode, setMode] = useState(getInitialMode()); // 'add' | 'update'
+    const [mode, setMode] = useState(getInitialMode());
     const [searchCardId, setSearchCardId] = useState('');
     const [loading, setLoading] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     const [formData, setFormData] = useState({
         name: '',
         age: '',
         card: '',
-        financialStatus: 'Below Poverty', // Default
+        financialStatus: 'Below Poverty',
         gender: 'Male',
         address: '',
         assignedShop: '',
@@ -57,67 +39,113 @@ const AddBeneficiary = () => {
         familyMembers: []
     });
 
+    const [showCamera, setShowCamera] = useState(false);
+    const [activePhotoTarget, setActivePhotoTarget] = useState('head');
+    const videoRef = useRef(null);
+    const streamRef = useRef(null);
+
+    useEffect(() => {
+        const userStr = localStorage.getItem('user');
+        if (userStr) {
+            const user = JSON.parse(userStr);
+            setCurrentUser(user);
+            setFormData(p => ({ ...p, assignedShop: user.shopLocation || '' }));
+            fetchShops();
+        } else {
+            navigate('/');
+        }
+    }, []);
+
+    const fetchShops = async () => {
+        try {
+            const res = await fetch(`${API_URL}/shops`);
+            setShops(await res.json());
+        } catch (err) { }
+    };
+
     const resetForm = () => {
         setFormData({
-            name: '',
-            age: '',
-            card: '',
-            financialStatus: 'Below Poverty',
-            gender: 'Male',
-            address: '',
-            assignedShop: currentUser?.shopLocation || '',
-            image: '',
-            familyMembers: []
+            name: '', age: '', card: '',
+            financialStatus: 'Below Poverty', gender: 'Male',
+            address: '', assignedShop: currentUser?.shopLocation || '',
+            image: '', familyMembers: []
         });
         setSearchCardId('');
     };
 
     const handleSearch = async () => {
-        if (!searchCardId.trim()) return addToast("Please enter a Card ID", "error");
+        if (!searchCardId.trim()) return addToast("Enter Card ID", "error");
         setLoading(true);
         try {
             const res = await fetch(`${API_URL}/beneficiaries/card/${searchCardId.trim()}`);
             if (res.ok) {
                 const data = await res.json();
                 setFormData({
-                    name: data.name || '',
-                    age: data.age || '', // Added missing age field
-                    card: data.card || '',
+                    ...data,
+                    // Ensure defaults
                     financialStatus: data.financialStatus || 'Below Poverty',
                     gender: data.gender || 'Male',
-                    address: data.address || '',
                     assignedShop: data.assignedShop || '',
-                    image: data.image || '',
                     familyMembers: data.familyMembers || []
                 });
-                addToast("Beneficiary Details Loaded", "success");
+                addToast("Beneficiary Found", "success");
             } else {
                 addToast("Beneficiary not found", "error");
                 resetForm();
             }
         } catch (err) {
-            addToast("Search failed", "error");
+            addToast("Search Failed", "error");
         } finally {
             setLoading(false);
         }
     };
 
-    const [showCamera, setShowCamera] = useState(false);
-    const [activePhotoTarget, setActivePhotoTarget] = useState('head'); // 'head' or index (0, 1, 2...)
-    const videoRef = useRef(null);
-    const streamRef = useRef(null);
+    // Camera Logic
+    const startCamera = async (target) => {
+        setActivePhotoTarget(target);
+        setShowCamera(true);
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            streamRef.current = stream;
+            // Delay slightly to let modal mount
+            setTimeout(() => { if (videoRef.current) videoRef.current.srcObject = stream; }, 100);
+        } catch (err) {
+            addToast("Camera Error", "error");
+            setShowCamera(false);
+        }
+    };
+
+    const takePhoto = () => {
+        if (!videoRef.current) return;
+        const canvas = document.createElement('canvas');
+        canvas.width = videoRef.current.videoWidth;
+        canvas.height = videoRef.current.videoHeight;
+        canvas.getContext('2d').drawImage(videoRef.current, 0, 0);
+        const dataUrl = canvas.toDataURL('image/jpeg');
+
+        if (activePhotoTarget === 'head') setFormData(p => ({ ...p, image: dataUrl }));
+        else {
+            const updated = [...formData.familyMembers];
+            updated[activePhotoTarget].image = dataUrl;
+            setFormData(p => ({ ...p, familyMembers: updated }));
+        }
+        stopCamera();
+    };
+
+    const stopCamera = () => {
+        if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+        setShowCamera(false);
+    };
 
     const handleFileChange = (e, target) => {
         const file = e.target.files[0];
         if (file) {
             const reader = new FileReader();
             reader.onloadend = () => {
-                const result = reader.result;
-                if (target === 'head') {
-                    setFormData(prev => ({ ...prev, image: result }));
-                } else {
+                if (target === 'head') setFormData(p => ({ ...p, image: reader.result }));
+                else {
                     const updated = [...formData.familyMembers];
-                    updated[target].image = result;
+                    updated[target].image = reader.result;
                     setFormData({ ...formData, familyMembers: updated });
                 }
             };
@@ -125,72 +153,9 @@ const AddBeneficiary = () => {
         }
     };
 
-    const startCamera = async (target) => {
-        setActivePhotoTarget(target);
-        setShowCamera(true);
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-            streamRef.current = stream;
-            setTimeout(() => {
-                if (videoRef.current) {
-                    videoRef.current.srcObject = stream;
-                }
-            }, 100);
-        } catch (err) {
-            addToast("Camera access denied", "error");
-            setShowCamera(false);
-        }
-    };
-
-    const takePhoto = () => {
-        if (videoRef.current) {
-            const canvas = document.createElement('canvas');
-            canvas.width = videoRef.current.videoWidth;
-            canvas.height = videoRef.current.videoHeight;
-            canvas.getContext('2d').drawImage(videoRef.current, 0, 0);
-            const dataUrl = canvas.toDataURL('image/jpeg');
-
-            if (activePhotoTarget === 'head') {
-                setFormData(prev => ({ ...prev, image: dataUrl }));
-            } else {
-                const updated = [...formData.familyMembers];
-                updated[activePhotoTarget].image = dataUrl;
-                setFormData({ ...formData, familyMembers: updated });
-            }
-            stopCamera();
-        }
-    };
-
-    const stopCamera = () => {
-        if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => track.stop());
-            streamRef.current = null;
-        }
-        setShowCamera(false);
-    };
-
-    const handleAddMember = () => {
-        setFormData({
-            ...formData,
-            familyMembers: [...formData.familyMembers, { name: '', age: '', gender: 'Male', relation: 'Child' }]
-        });
-    };
-
-    const handleRemoveMember = (index) => {
-        const updated = formData.familyMembers.filter((_, i) => i !== index);
-        setFormData({ ...formData, familyMembers: updated });
-    };
-
-    const handleMemberChange = (index, field, value) => {
-        const updated = [...formData.familyMembers];
-        updated[index][field] = value;
-        setFormData({ ...formData, familyMembers: updated });
-    };
-
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (!currentUser) return;
-
+        setIsSubmitting(true);
         try {
             const payload = {
                 submittedBy: currentUser.email,
@@ -210,318 +175,232 @@ const AddBeneficiary = () => {
 
             const data = await res.json();
             if (res.ok) {
-                addToast("Request Submitted Successfully! Admin will review.", 'success');
+                addToast("Request Submitted. Awaiting Approval.", 'success');
                 navigate('/home');
             } else {
-                addToast(`Error: ${data.error}`, 'error');
+                addToast(data.error || "Submission Failed", 'error');
             }
         } catch (err) {
-            addToast("Submission failed: " + err.message, 'error');
+            addToast("Network Error", 'error');
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
     return (
-        <div className="min-h-screen bg-slate-50 p-6 flex justify-center">
-            <div className="w-full max-w-3xl bg-white rounded-2xl shadow-xl overflow-hidden">
+        <div className="min-h-screen bg-slate-50 p-6 font-sans">
+            <div className="max-w-4xl mx-auto">
                 {/* Header */}
-                <div className="bg-gradient-to-r from-pink-500 to-rose-500 p-6 text-white flex items-center justify-between">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
                     <div className="flex items-center gap-4">
-                        <button onClick={() => navigate('/home')} className="p-2 hover:bg-white/20 rounded-full transition-colors">
+                        <Button variant="ghost" size="icon" onClick={() => navigate('/home')}>
                             <ArrowLeft size={24} />
-                        </button>
+                        </Button>
                         <div>
-                            <h1 className="text-2xl font-bold">
-                                {mode === 'add' ? 'New Beneficiary Request' : 'Update Beneficiary'}
+                            <h1 className="text-2xl font-bold text-slate-900">
+                                {mode === 'add' ? 'New Registration' : 'Update Beneficiary'}
                             </h1>
-                            <p className="text-pink-100 text-sm">
-                                {mode === 'add' ? 'Fill in details to request addition to database' : 'Search and update existing beneficiary details'}
+                            <p className="text-slate-500 text-sm">
+                                {mode === 'add' ? 'Submit new beneficiary application' : 'Modify existing beneficiary details'}
                             </p>
                         </div>
                     </div>
-                    {/* Mode Toggle */}
-                    <div className="flex bg-white/20 p-1 rounded-xl">
+
+                    <div className="flex bg-white p-1 rounded-xl shadow-sm border border-slate-200">
                         <button
+                            id="btn-mode-new"
                             onClick={() => { setMode('add'); resetForm(); }}
-                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${mode === 'add' ? 'bg-white text-pink-600 shadow-lg' : 'text-white hover:bg-white/10'}`}
+                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${mode === 'add' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
                         >
                             New Request
                         </button>
                         <button
+                            id="btn-mode-update"
                             onClick={() => { setMode('update'); resetForm(); }}
-                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${mode === 'update' ? 'bg-white text-pink-600 shadow-lg' : 'text-white hover:bg-white/10'}`}
+                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${mode === 'update' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
                         >
                             Update Existing
                         </button>
                     </div>
                 </div>
 
-                <div className="p-8 space-y-8">
-                    {/* Search Section for Update Mode */}
-                    {mode === 'update' && (
-                        <div className="bg-slate-100 p-6 rounded-2xl flex flex-col md:flex-row gap-4 items-end border border-slate-200">
-                            <div className="w-full">
-                                <label className="block text-sm font-medium text-slate-600 mb-1">Search by Ration Card Number</label>
-                                <div className="relative">
-                                    <Search className="absolute left-3 top-3.5 text-slate-400" size={18} />
-                                    <input
-                                        className="w-full pl-10 p-3 border rounded-xl bg-white focus:ring-2 focus:ring-pink-500 outline-none transition-all"
-                                        placeholder="Enter Card ID (e.g. TN-722824106120)"
-                                        value={searchCardId}
-                                        onChange={e => setSearchCardId(e.target.value)}
-                                        onKeyDown={e => e.key === 'Enter' && handleSearch()}
-                                    />
-                                </div>
-                            </div>
-                            <button
-                                onClick={handleSearch}
-                                disabled={loading}
-                                className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold shadow-lg transition-all flex items-center gap-2 disabled:opacity-50"
-                            >
-                                {loading ? <Loader2 size={20} className="animate-spin" /> : <Search size={20} />}
-                                Search
-                            </button>
+                {/* Search Box (Update Mode) */}
+                {mode === 'update' && (
+                    <Card className="p-6 mb-8 flex flex-col md:flex-row gap-4 items-end bg-gradient-to-r from-indigo-50 to-white border-indigo-100">
+                        <div className="flex-1 w-full">
+                            <Input
+                                label="Search by Smart Card ID"
+                                icon={Search}
+                                placeholder="e.g. TN-722824106120"
+                                value={searchCardId}
+                                onChange={e => setSearchCardId(e.target.value)}
+                                className="bg-white"
+                            />
                         </div>
-                    )}
+                        <Button
+                            onClick={handleSearch}
+                            isLoading={loading}
+                            className="w-full md:w-auto bg-slate-800 text-white"
+                        >
+                            Search Records
+                        </Button>
+                    </Card>
+                )}
 
-                    <form onSubmit={handleSubmit} className="space-y-8">
+                <form onSubmit={handleSubmit} className="space-y-8">
+                    {/* Main Beneficiary Info */}
+                    <Card className="p-8">
+                        <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
+                            <User className="text-indigo-600" size={20} /> Head of Family Details
+                        </h3>
 
-                        {/* Section 0: Beneficiary Image */}
-                        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center gap-4">
-                            <div className="relative group">
-                                <div className="w-32 h-32 rounded-full overflow-hidden bg-slate-100 border-4 border-white shadow-lg flex items-center justify-center">
+                        <div className="flex flex-col lg:flex-row gap-8">
+                            {/* Photo */}
+                            <div className="flex flex-col items-center gap-3 shrink-0">
+                                <div className="w-32 h-32 rounded-full overflow-hidden bg-slate-100 border-4 border-white shadow-lg relative group">
                                     {formData.image ? (
-                                        <img src={formData.image} alt="Preview" className="w-full h-full object-cover" />
+                                        <img src={formData.image} className="w-full h-full object-cover" />
                                     ) : (
-                                        <User size={64} className="text-slate-300" />
+                                        <div className="w-full h-full flex items-center justify-center text-slate-300"><User size={48} /></div>
+                                    )}
+                                    {formData.image && (
+                                        <button type="button" onClick={() => setFormData(p => ({ ...p, image: '' }))} className="absolute top-0 right-0 bg-red-500 text-white p-1 rounded-full shadow-md"><Trash2 size={12} /></button>
                                     )}
                                 </div>
-                                {formData.image && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setFormData({ ...formData, image: '' })}
-                                        className="absolute top-0 right-0 bg-red-500 text-white p-1 rounded-full shadow-md hover:bg-red-600 transition-colors"
-                                    >
-                                        <Trash2 size={14} />
-                                    </button>
-                                )}
-                            </div>
-
-                            <div className="flex gap-4">
-                                {/* Upload Button */}
-                                <label className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl cursor-pointer transition-colors font-medium text-sm">
-                                    <Upload size={18} /> Upload Photo
-                                    <input type="file" accept="image/*" className="hidden" onChange={(e) => handleFileChange(e, 'head')} />
-                                </label>
-
-                                {/* Camera Button */}
-                                <button
-                                    id="btn-open-camera"
-                                    type="button"
-                                    onClick={() => startCamera('head')}
-                                    className="flex items-center gap-2 px-4 py-2 bg-pink-50 hover:bg-pink-100 text-pink-600 rounded-xl transition-colors font-medium text-sm"
-                                >
-                                    <Camera size={18} /> Take Photo
-                                </button>
-                            </div>
-                        </div>
-
-                        {/* Camera Modal */}
-                        {showCamera && (
-                            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-                                <div className="bg-white rounded-2xl overflow-hidden shadow-2xl w-full max-w-lg">
-                                    <div className="relative bg-black aspect-video flex items-center justify-center">
-                                        <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-                                    </div>
-                                    <div className="p-6 flex justify-between items-center bg-white">
-                                        <button
-                                            type="button"
-                                            onClick={stopCamera}
-                                            className="text-slate-500 hover:text-slate-700 font-medium"
-                                        >
-                                            Cancel
-                                        </button>
-                                        <button
-                                            id="btn-capture-photo"
-                                            type="button"
-                                            onClick={takePhoto}
-                                            className="px-6 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-full font-bold shadow-lg flex items-center gap-2"
-                                        >
-                                            <Camera size={18} /> Capture
-                                        </button>
-                                    </div>
+                                <div className="flex gap-2">
+                                    <label className="p-2 bg-slate-100 rounded-lg hover:bg-slate-200 cursor-pointer text-slate-600" title="Upload"><Upload size={16} />
+                                        <input type="file" accept="image/*" className="hidden" onChange={e => handleFileChange(e, 'head')} />
+                                    </label>
+                                    <button type="button" onClick={() => startCamera('head')} className="p-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100"><Camera size={16} /></button>
                                 </div>
                             </div>
-                        )}
 
-                        {/* Section 1: Head of Family */}
-                        <div className="space-y-4">
-                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                                <User className="text-pink-500" /> Head of Family Details
-                            </h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-600 mb-1">Full Name</label>
-                                    <input required className="w-full p-3 border rounded-xl bg-slate-50 focus:ring-2 focus:ring-pink-500 outline-none transition-all"
-                                        placeholder="e.g. Ramesh Gupta"
-                                        value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-600 mb-1">Ration Card Number</label>
-                                    <div className="relative">
-                                        <CreditCard className="absolute left-3 top-3.5 text-slate-400" size={18} />
-                                        <input required className="w-full pl-10 p-3 border rounded-xl bg-slate-50 focus:ring-2 focus:ring-pink-500 outline-none transition-all"
-                                            placeholder="e.g. RC-123456"
-                                            value={formData.card} onChange={e => setFormData({ ...formData, card: e.target.value })} />
-                                    </div>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-600 mb-1">Financial Status</label>
-                                    <select className="w-full p-3 border rounded-xl bg-slate-50 focus:ring-2 focus:ring-pink-500 outline-none"
+                            {/* Fields */}
+                            <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-5">
+                                <Input label="Full Name" required value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} />
+                                <Input label="Ration Card Number" icon={CreditCard} required value={formData.card} onChange={e => setFormData({ ...formData, card: e.target.value })} />
+
+                                <div className="space-y-1.5">
+                                    <label className="text-xs font-bold text-slate-500 uppercase ml-1">Financial Status</label>
+                                    <select className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3.5 outline-none focus:border-indigo-500 text-sm font-medium"
                                         value={formData.financialStatus} onChange={e => setFormData({ ...formData, financialStatus: e.target.value })}>
-                                        <option value="Below Poverty">Below Poverty (Green Card)</option>
-                                        <option value="Above Poverty">Above Poverty (White Card)</option>
+                                        <option value="Below Poverty">Below Poverty (Green)</option>
+                                        <option value="Above Poverty">Above Poverty (White)</option>
                                     </select>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-600 mb-1">Gender</label>
-                                    <select className="w-full p-3 border rounded-xl bg-slate-50 focus:ring-2 focus:ring-pink-500 outline-none"
-                                        value={formData.gender} onChange={e => setFormData({ ...formData, gender: e.target.value })}>
-                                        <option>Male</option>
-                                        <option>Female</option>
-                                        <option>Other</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-600 mb-1">Age</label>
-                                    <input required type="number" className="w-full p-3 border rounded-xl bg-slate-50 focus:ring-2 focus:ring-pink-500 outline-none transition-all"
-                                        placeholder="e.g. 45"
-                                        value={formData.age} onChange={e => setFormData({ ...formData, age: e.target.value })} />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-600 mb-1">Address (Optional)</label>
-                                    <input className="w-full p-3 border rounded-xl bg-slate-50 focus:ring-2 focus:ring-pink-500 outline-none transition-all"
-                                        placeholder="Village / Town"
-                                        value={formData.address} onChange={e => setFormData({ ...formData, address: e.target.value })} />
                                 </div>
 
-                                {/* Shop Selection */}
+                                <Input label="Age" type="number" required value={formData.age} onChange={e => setFormData({ ...formData, age: e.target.value })} />
+
                                 <div className="md:col-span-2">
-                                    <label className="block text-sm font-medium text-slate-600 mb-1">Assigned Ration Shop</label>
-                                    <div className="relative">
-                                        <MapPin className="absolute left-3 top-3.5 text-slate-400" size={18} />
-                                        <select
-                                            className="w-full pl-10 p-3 border rounded-xl bg-slate-50 focus:ring-2 focus:ring-pink-500 outline-none transition-all appearance-none"
-                                            value={formData.assignedShop}
-                                            onChange={e => setFormData({ ...formData, assignedShop: e.target.value })}
-                                        >
-                                            <option value="">-- Select Shop --</option>
-                                            {shops.map(shop => (
-                                                <option key={shop._id || shop.code} value={shop.name}>{shop.name} ({shop.address})</option>
-                                            ))}
-                                            {/* Fallback if user's shop isn't in list */}
-                                            {currentUser?.shopLocation && !shops.find(s => s.name === currentUser.shopLocation) && (
-                                                <option value={currentUser.shopLocation}>{currentUser.shopLocation} (My Shop)</option>
-                                            )}
-                                        </select>
-                                    </div>
-                                    <p className="text-xs text-slate-400 mt-1">Beneficiary will be linked to this shop.</p>
+                                    <Input label="Address" icon={MapPin} value={formData.address} onChange={e => setFormData({ ...formData, address: e.target.value })} />
+                                </div>
+
+                                <div className="md:col-span-2 space-y-1.5">
+                                    <label className="text-xs font-bold text-slate-500 uppercase ml-1">Assigned Shop</label>
+                                    <select className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3.5 outline-none focus:border-indigo-500 text-sm font-medium"
+                                        value={formData.assignedShop} onChange={e => setFormData({ ...formData, assignedShop: e.target.value })}>
+                                        <option value="">Select Shop location...</option>
+                                        {shops.map(s => <option key={s._id} value={s.tehsil}>{s.tehsil} ({s.address})</option>)}
+                                        {currentUser?.shopLocation && !shops.find(s => s.tehsil === currentUser.shopLocation) &&
+                                            <option value={currentUser.shopLocation}>{currentUser.shopLocation} (Current)</option>
+                                        }
+                                    </select>
                                 </div>
                             </div>
                         </div>
+                    </Card>
 
-                        <hr className="border-slate-100" />
+                    {/* Family Members */}
+                    <Card className="p-8">
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                <Users className="text-indigo-600" size={20} /> Family Members
+                            </h3>
+                            <Button type="button" onClick={() => setFormData(p => ({ ...p, familyMembers: [...p.familyMembers, { name: '', age: '', gender: 'Male', relation: 'Child' }] }))} size="sm" className="gap-2">
+                                <Plus size={16} /> Add Member
+                            </Button>
+                        </div>
 
-                        {/* Section 2: Family Members */}
-                        <div className="space-y-4">
-                            <div className="flex justify-between items-end">
-                                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                                    <Users className="text-pink-500" /> Family Members
-                                </h3>
-                                <button type="button" onClick={handleAddMember} className="text-pink-600 font-bold text-sm bg-pink-50 px-4 py-2 rounded-lg hover:bg-pink-100 transition-colors flex items-center gap-2">
-                                    <Plus size={16} /> Add Member
-                                </button>
+                        {formData.familyMembers.length === 0 ? (
+                            <div className="text-center py-8 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-slate-400">
+                                No family members added.
                             </div>
+                        ) : (
+                            <div className="space-y-4">
+                                {formData.familyMembers.map((member, idx) => (
+                                    <div key={idx} className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col md:flex-row gap-4 items-start relative group">
+                                        <button type="button" onClick={() => {
+                                            const updated = formData.familyMembers.filter((_, i) => i !== idx);
+                                            setFormData({ ...formData, familyMembers: updated });
+                                        }} className="absolute top-2 right-2 text-slate-400 hover:text-red-500 md:opacity-0 group-hover:opacity-100 transition-opacity"><X size={16} /></button>
 
-                            <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-4">
-                                {formData.familyMembers.length === 0 && (
-                                    <p className="text-center text-slate-400 py-4">No family members added yet.</p>
-                                )}
-                                {formData.familyMembers.map((member, index) => (
-                                    <div key={index} className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 relative group">
-                                        <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <button type="button" onClick={() => handleRemoveMember(index)} className="text-red-400 hover:text-red-600 p-1">
-                                                <Trash2 size={18} />
-                                            </button>
+                                        <div className="w-16 h-16 rounded-full bg-white border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer relative"
+                                            onClick={() => startCamera(idx)}>
+                                            {member.image ? <img src={member.image} className="w-full h-full object-cover" /> : <Camera size={20} className="text-slate-300" />}
                                         </div>
-                                        <h4 className="text-xs font-bold text-slate-400 uppercase mb-3">Member {index + 1}</h4>
-                                        <div className="flex flex-col md:flex-row gap-6">
-                                            {/* Member Photo */}
-                                            <div className="flex flex-col items-center gap-2">
-                                                <div className="w-20 h-20 rounded-full bg-slate-100 overflow-hidden border-2 border-slate-200 flex items-center justify-center relative group/img">
-                                                    {member.image ? (
-                                                        <img src={member.image} alt="Member" className="w-full h-full object-cover" />
-                                                    ) : (
-                                                        <User size={32} className="text-slate-300" />
-                                                    )}
-                                                </div>
-                                                <div className="flex gap-2">
-                                                    <label className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 cursor-pointer" title="Upload">
-                                                        <Upload size={14} />
-                                                        <input type="file" accept="image/*" className="hidden" onChange={(e) => handleFileChange(e, index)} />
-                                                    </label>
-                                                    <button type="button" onClick={() => startCamera(index)} className="p-2 bg-pink-50 text-pink-600 rounded-lg hover:bg-pink-100" title="Camera">
-                                                        <Camera size={14} />
-                                                    </button>
-                                                </div>
-                                            </div>
 
-                                            {/* Member Details */}
-                                            <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                <div className="md:col-span-2">
-                                                    <input placeholder="Member Name" required className="w-full p-2 border rounded-lg text-sm"
-                                                        value={member.name} onChange={e => handleMemberChange(index, 'name', e.target.value)} />
-                                                </div>
-                                                <div>
-                                                    <input placeholder="Age" required type="number" className="w-full p-2 border rounded-lg text-sm"
-                                                        value={member.age} onChange={e => handleMemberChange(index, 'age', e.target.value)} />
-                                                </div>
-                                                <div className="flex gap-2">
-                                                    <select className="w-1/2 p-2 border rounded-lg text-sm"
-                                                        value={member.gender} onChange={e => handleMemberChange(index, 'gender', e.target.value)}>
-                                                        <option>Male</option>
-                                                        <option>Female</option>
-                                                        <option>Other</option>
-                                                    </select>
-                                                    <select className="w-1/2 p-2 border rounded-lg text-sm"
-                                                        value={member.relation} onChange={e => handleMemberChange(index, 'relation', e.target.value)}>
-                                                        <option>Spouse</option>
-                                                        <option>Child</option>
-                                                        <option>Parent</option>
-                                                        <option>Sibling</option>
-                                                        <option>Other</option>
-                                                    </select>
-                                                </div>
+                                        <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-3 w-full">
+                                            <div className="col-span-2 md:col-span-1">
+                                                <input placeholder="Name" className="w-full p-2 rounded-lg text-sm border border-slate-200 outline-none focus:border-indigo-500"
+                                                    value={member.name} onChange={e => {
+                                                        const u = [...formData.familyMembers]; u[idx].name = e.target.value;
+                                                        setFormData({ ...formData, familyMembers: u });
+                                                    }}
+                                                />
                                             </div>
+                                            <input placeholder="Age" type="number" className="w-full p-2 rounded-lg text-sm border border-slate-200 outline-none focus:border-indigo-500"
+                                                value={member.age} onChange={e => {
+                                                    const u = [...formData.familyMembers]; u[idx].age = e.target.value;
+                                                    setFormData({ ...formData, familyMembers: u });
+                                                }}
+                                            />
+                                            <select className="w-full p-2 rounded-lg text-sm border border-slate-200 outline-none focus:border-indigo-500"
+                                                value={member.gender} onChange={e => {
+                                                    const u = [...formData.familyMembers]; u[idx].gender = e.target.value;
+                                                    setFormData({ ...formData, familyMembers: u });
+                                                }}>
+                                                <option>Male</option><option>Female</option>
+                                            </select>
+                                            <select className="w-full p-2 rounded-lg text-sm border border-slate-200 outline-none focus:border-indigo-500"
+                                                value={member.relation} onChange={e => {
+                                                    const u = [...formData.familyMembers]; u[idx].relation = e.target.value;
+                                                    setFormData({ ...formData, familyMembers: u });
+                                                }}>
+                                                <option>Child</option><option>Spouse</option><option>Parent</option><option>Sibling</option>
+                                            </select>
                                         </div>
                                     </div>
                                 ))}
                             </div>
-                        </div>
+                        )}
+                    </Card>
 
-                        {/* Footer Stats & Submit */}
-                        <div className="bg-slate-900 text-white p-6 rounded-2xl flex flex-col md:flex-row justify-between items-center gap-4">
-                            <div>
-                                <p className="text-slate-400 text-sm">Total Members to Register</p>
-                                <p className="text-3xl font-bold">{1 + formData.familyMembers.length} <span className="text-lg text-slate-600 font-normal">Person(s)</span></p>
-                            </div>
-                            <button id="btn-submit-request" type="submit" className="w-full md:w-auto px-8 py-4 bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-400 hover:to-rose-400 rounded-xl font-bold shadow-lg shadow-rose-900/30 transition-all transform active:scale-95 flex items-center justify-center gap-2">
-                                <Save size={20} /> Submit Request
-                            </button>
+                    {/* Submit Bar */}
+                    <div className="fixed bottom-0 left-0 w-full bg-white border-t border-slate-200 p-4 md:px-8 flex justify-between items-center z-40 shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
+                        <div>
+                            <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">Total Headcount</p>
+                            <p className="text-xl font-bold text-slate-900">{1 + formData.familyMembers.length} <span className="text-sm font-normal text-slate-500">Members</span></p>
                         </div>
-
-                    </form>
-                </div>
+                        <Button type="submit" isLoading={isSubmitting} className="px-8 bg-brand-600 hover:bg-brand-700 text-white shadow-brand-200">
+                            Submit Request
+                        </Button>
+                    </div>
+                </form>
+                <div className="h-24" /> {/* Spacer for fixed footer */}
             </div>
+
+            {/* Camera Overlay */}
+            {showCamera && (
+                <div className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-4">
+                    <div className="w-full max-w-lg aspect-video bg-black rounded-2xl overflow-hidden border border-slate-700 relative mb-6">
+                        <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
+                    </div>
+                    <div className="flex gap-4">
+                        <Button variant="outline" className="text-white border-slate-600 hover:bg-slate-800" onClick={stopCamera}>Cancel</Button>
+                        <Button onClick={takePhoto} className="bg-white text-black hover:bg-slate-200 px-8">Capture</Button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

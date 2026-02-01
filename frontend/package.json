@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/plus-jakarta-sans": "^5.2.8",
     "face-api.js": "^0.22.2",
     "firebase": "^12.8.0",
     "framer-motion": "^12.29.0",

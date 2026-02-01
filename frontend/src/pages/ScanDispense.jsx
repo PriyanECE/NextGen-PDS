@@ -1,188 +1,87 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Camera, CheckCircle, XCircle, RefreshCw, ShoppingBag, User, FileText, AlertTriangle, UserX, Plus, Zap, Clock, CreditCard, Banknote, ShieldCheck } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
-
-import { useLocation, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { Camera, User, Package, DollarSign, CheckCircle, XCircle, Loader, ArrowLeft } from 'lucide-react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useToast } from '../context/ToastContext';
 import QrScanner from 'qr-scanner';
-import { io } from 'socket.io-client';
-import { Scale } from 'lucide-react';
+import io from 'socket.io-client';
+import Button from '../components/ui/Button';
+import Card from '../components/ui/Card';
+import API_URL from '../config/api';
 
 const ScanDispense = () => {
-    const navigate = useNavigate(); // Fix: location was unused, added navigate
+    const navigate = useNavigate();
+    const location = useLocation();
     const { addToast } = useToast();
 
-    // Steps: 1: Scan, 2: Details & Ration, 3: Face Auth, 4: Payment, 5: Dispense
+    // Steps: 1: Scan, 2: Details, 3: Face Auth, 3.5: Auth Success, 4: Payment, 5: Dispense Success
     const [step, setStep] = useState(1);
-
     const [currentUser, setCurrentUser] = useState(null);
     const [scannedData, setScannedData] = useState(null);
-    const [inventory, setInventory] = useState({ total: 0, dispensed: 0 });
 
-    // Scanner State
+    // Scanner
     const videoRef = useRef(null);
     const scannerRef = useRef(null);
     const [isScanning, setIsScanning] = useState(false);
+    const [scanError, setScanError] = useState('');
     const [cameras, setCameras] = useState([]);
     const [selectedCamera, setSelectedCamera] = useState('');
-    const [hasFlash, setHasFlash] = useState(false);
-    const [flashOn, setFlashOn] = useState(false);
-    const [scanError, setScanError] = useState('');
 
-    // Vision Safety State
-    const [visionStatus, setVisionStatus] = useState({ status: 'safe', message: '' });
-
-    // Scale State
-    const [currentWeight, setCurrentWeight] = useState(0);
-    const [scaleConnected, setScaleConnected] = useState(false);
-
-    // Ration State
-    const [rationDetails, setRationDetails] = useState({ rice: 0, dhal: 0, cost: 0, maxRice: 0, maxDhal: 0 });
+    // Flow State
+    const [selectedMemberId, setSelectedMemberId] = useState('HEAD');
+    const [rationDetails, setRationDetails] = useState({ rice: 0, dhal: 0, cost: 0 });
     const [selectedRations, setSelectedRations] = useState({ rice: true, dhal: true });
+    const [paymentMode, setPaymentMode] = useState('Cash');
+    const [isProcessing, setIsProcessing] = useState(false);
 
-    // Auth & Payment State
-    const [selectedMemberId, setSelectedMemberId] = useState('HEAD'); // 'HEAD' or member._id
-    const [faceVerified, setFaceVerified] = useState(false);
-    const [paymentMode, setPaymentMode] = useState('Cash'); // Cash | UPI
-    const [dispensing, setDispensing] = useState(false);
+    const SOCKET_URL = API_URL;
 
-    // Socket Ref
-    const socketRef = useRef(null);
-    const API_URL = 'http://localhost:5000/api';
-    const SOCKET_URL = 'http://localhost:5000';
-
-    // Load User
     useEffect(() => {
         const user = localStorage.getItem('user');
         if (user) setCurrentUser(JSON.parse(user));
 
-        // Connect Socket for Scale Updates
-        socketRef.current = io(SOCKET_URL);
+        // Auto-start via URL
+        const query = new URLSearchParams(location.search);
+        if (query.get('start') === 'true' && step === 1) startScanner();
 
-        socketRef.current.on('hardware:weight', (data) => {
-            setCurrentWeight(data.current || 0);
-        });
-
-        socketRef.current.on('hardware:connected', () => setScaleConnected(true));
-        socketRef.current.on('hardware:disconnected', () => setScaleConnected(false));
-
-        // Vision Alerts
-        socketRef.current.on('vision:alert', (data) => {
-            const newStatus = data || { status: 'safe', message: '' };
-            setVisionStatus(newStatus);
-
-            // Audio Feedback
-            if (newStatus.status === 'danger') {
-                const utterance = new SpeechSynthesisUtterance("Danger: Hand detected. Please remove hand.");
-                window.speechSynthesis.speak(utterance);
-            } else if (newStatus.status === 'warning') {
-                const utterance = new SpeechSynthesisUtterance("Warning: Please place bag properly.");
-                window.speechSynthesis.speak(utterance);
-            }
-        });
-
-        // Dispense Completion Listener
-        socketRef.current.on('hardware:complete', (data) => {
-            console.log("Dispense Complete!", data);
-            setDispensing(false);
-            addToast('Dispensing Finished!', 'success');
-            setStep(5); // Go to Success Page
-        });
-
-        return () => {
-            if (socketRef.current) socketRef.current.disconnect();
-        };
+        return () => stopScanner();
     }, []);
 
-    // AUTO-START SCANNER (For Voice Command)
-    useEffect(() => {
-        const query = new URLSearchParams(location.search);
-        if (query.get('start') === 'true' && step === 1 && !isScanning) {
-            console.log("Auto-starting scanner via URL param");
-            startScanner();
-            // Optional: Clean URL
-            navigate('/scan', { replace: true });
-        }
-    }, [location.search, step, isScanning]);
-
-    // Load Inventory
-    useEffect(() => {
-        const fetchInv = async () => {
-            try {
-                const res = await fetch(`${API_URL}/inventory`);
-                if (res.ok) setInventory(await res.json());
-            } catch (err) { console.error(err); }
-        };
-        fetchInv();
-    }, [step]);
-
-    // RATION CALCULATION ENGINE
+    // --- LOGIC: RATION CALCULATION ---
     useEffect(() => {
         if (scannedData) {
-            calculateEntitlement();
+            const isBPL = (scannedData.financialStatus || 'Below Poverty') === 'Below Poverty';
+            let riceKg = 0, dhalKg = 0;
+
+            // Head
+            const headAge = scannedData.age || 30;
+            riceKg += isBPL ? (headAge >= 18 ? 0.3 : 0.15) : (headAge >= 18 ? 0.1 : 0.05);
+            dhalKg += isBPL ? (headAge >= 18 ? 0.2 : 0.1) : (headAge >= 18 ? 0.1 : 0.05);
+
+            // Members
+            scannedData.members.forEach(m => {
+                const age = m.age || 0;
+                riceKg += isBPL ? (age >= 18 ? 0.3 : 0.15) : (age >= 18 ? 0.1 : 0.05);
+                dhalKg += isBPL ? (age >= 18 ? 0.2 : 0.1) : (age >= 18 ? 0.1 : 0.05);
+            });
+
+            // Cap at 3kg per request
+            riceKg = Math.min(riceKg, 3.0);
+            dhalKg = Math.min(dhalKg, 3.0);
+
+            const finalRice = selectedRations.rice ? riceKg : 0;
+            const finalDhal = selectedRations.dhal ? dhalKg : 0;
+
+            setRationDetails({
+                rice: finalRice,
+                dhal: finalDhal,
+                maxRice: riceKg,
+                maxDhal: dhalKg,
+                cost: (finalRice * 100) + (finalDhal * 200)
+            });
         }
     }, [scannedData, selectedRations]);
 
-    const calculateEntitlement = () => {
-        // Rates: Rice 100/kg (10/100g), Dhal 200/kg (20/100g)
-        const RICE_PRICE_PER_KG = 100;
-        const DHAL_PRICE_PER_KG = 200;
-
-        const isBPL = (scannedData.financialStatus || 'Below Poverty') === 'Below Poverty';
-
-        let riceKg = 0;
-        let dhalKg = 0;
-
-        // 1. Head
-        const headAge = scannedData.age || 30; // Default to adult if missing
-        if (isBPL) {
-            riceKg += headAge >= 18 ? 0.3 : 0.15;
-            dhalKg += headAge >= 18 ? 0.2 : 0.1;
-        } else {
-            riceKg += headAge >= 18 ? 0.1 : 0.05;
-            dhalKg += headAge >= 18 ? 0.1 : 0.05;
-        }
-
-        // 2. Members
-        scannedData.members.forEach(m => {
-            const age = m.age || 0;
-            if (isBPL) {
-                riceKg += age >= 18 ? 0.3 : 0.15;
-                dhalKg += age >= 18 ? 0.2 : 0.1;
-            } else {
-                riceKg += age >= 18 ? 0.1 : 0.05;
-                dhalKg += age >= 18 ? 0.1 : 0.05;
-            }
-        });
-
-        // Apply Selection
-        // USER REQUEST: Keep max weight 3 kg for both dhal and rice
-        const MAX_LIMIT_KG = 3.0;
-
-        // Ensure calculated entitlement doesn't exceed 3kg if that was the intention
-        riceKg = Math.min(riceKg, MAX_LIMIT_KG);
-        dhalKg = Math.min(dhalKg, MAX_LIMIT_KG);
-
-        // However, given the small default values (0.3), maybe they want to FORCE 3kg? 
-        // "keep max weight 3 kg" usually means Cap. 
-        // If they meant "Set entitlement to 3kg", they would say "make weight 3kg". 
-        // I will assume Cap. BUT I'll also boost the base logic so user *sees* the effect if they have many members.
-
-        const finalRice = selectedRations.rice ? riceKg : 0;
-        const finalDhal = selectedRations.dhal ? dhalKg : 0;
-
-        const totalCost = (finalRice * RICE_PRICE_PER_KG) + (finalDhal * DHAL_PRICE_PER_KG);
-
-        setRationDetails({
-            rice: finalRice,
-            dhal: finalDhal,
-            cost: totalCost,
-            maxRice: riceKg, // For UI display
-            maxDhal: dhalKg
-        });
-    };
-
-    // --- SCANNER LOGIC ---
+    // --- LOGIC: SCANNER ---
     const startScanner = async () => {
         if (isScanning) return;
         setScanError('');
@@ -190,32 +89,16 @@ const ScanDispense = () => {
             const scanner = new QrScanner(
                 videoRef.current,
                 (result) => processScan(result.data),
-                {
-                    returnDetailedScanResult: true,
-                    highlightScanRegion: true,
-                    highlightCodeOutline: true,
-                    maxScansPerSecond: 25,
-                }
+                { returnDetailedScanResult: true, highlightScanRegion: true, maxScansPerSecond: 25 }
             );
             scannerRef.current = scanner;
-
             const devices = await QrScanner.listCameras(true);
             setCameras(devices);
             if (selectedCamera) await scanner.setCamera(selectedCamera);
-
             await scanner.start();
             setIsScanning(true);
-            setHasFlash(await scanner.hasFlash());
         } catch (err) {
-            console.error(err);
-            const errMsg = err.toString();
-            if (errMsg.includes("accessible if the page is transferred via https")) {
-                setScanError("Camera requires HTTPS or Localhost");
-                addToast("Camera Blocked: Use Localhost or Enable HTTPS", "error");
-            } else {
-                setScanError("Camera Error: " + errMsg);
-            }
-            setIsScanning(false);
+            setScanError("Camera Error: " + err.message);
         }
     };
 
@@ -228,137 +111,72 @@ const ScanDispense = () => {
         }
     };
 
-    useEffect(() => {
-        return () => stopScanner();
-    }, []);
-
-    // Effect to toggle scanner based on step
-    useEffect(() => {
-        if (step === 3 && !isScanning && !scanError) {
-            // Only start if no previous error. If error exists, user must manually retry.
-            // Tiny delay to ensure DOM is ready
-            const timer = setTimeout(() => startScanner(), 100);
-            return () => clearTimeout(timer);
-        }
-    }, [step, isScanning, scanError]);
-
-    // Manual Retry handler
-    const retryScanner = () => {
-        setScanError('');
-        startScanner();
-    };
-
     const processScan = async (cardId) => {
         if (step !== 1) return;
-
         try {
-            const res = await fetch(`${API_URL}/beneficiaries/card/${cardId}`);
+            const res = await fetch(`${API_URL} /beneficiaries/card / ${cardId} `);
             if (res.ok) {
                 const data = await res.json();
-
-                // Construct reliable member list
-                const members = data.familyMembers || [];
-
-                let assignmentWarning = null;
-                if (data.assignedShop && currentUser?.shopLocation && data.assignedShop !== currentUser.shopLocation) {
-                    assignmentWarning = `Registered at ${data.assignedShop}`;
-                }
-
-                setScannedData({ ...data, members, assignmentWarning });
-                setSelectedMemberId('HEAD'); // Reset to HEAD on new scan
+                setScannedData({ ...data, members: data.familyMembers || [] });
+                setSelectedMemberId('HEAD');
                 stopScanner();
                 setStep(2);
                 addToast("Beneficiary Found", 'success');
             } else {
-                addToast("Beneficiary Not Found", 'error');
+                addToast("Invalid Card", 'error');
             }
         } catch (err) {
             addToast("Network Error", 'error');
         }
     };
 
-    // --- REAL FACE AUTH ---
-    const startFaceAuth = async () => {
-        setScanError(''); // Clear previous errors
-        setStep(3); // This triggers the useEffect below to start scanner
-        setFaceVerified(false);
+    // --- LOGIC: FACE AUTH ---
+    const startFaceAuth = () => {
+        setStep(3);
+        setScanError('');
+        setTimeout(startScanner, 100);
     };
 
-    // Effect: Capture Face when Camera is ready (Step 3 + isScanning)
     useEffect(() => {
-        let captureTimer;
-
-        const captureFace = async () => {
-            try {
-                if (!videoRef.current || videoRef.current.videoWidth === 0) {
-                    // Wait a bit more if video not ready
-                    captureTimer = setTimeout(captureFace, 500);
-                    return;
-                }
-
-                // Capture Frame
-                const canvas = document.createElement("canvas");
-                canvas.width = videoRef.current.videoWidth;
-                canvas.height = videoRef.current.videoHeight;
-                const ctx = canvas.getContext("2d");
-                ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-                const liveImage = canvas.toDataURL("image/jpeg");
-
-                // Send to Backend
-                const res = await fetch(`${API_URL}/verify-face`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        cardId: scannedData.card,
-                        liveImage,
-                        memberId: selectedMemberId // Send selected member ID
-                    })
-                });
-
-                const data = await res.json();
-
-                if (res.ok && data.success && data.authenticated) {
-                    setFaceVerified(true);
-                    addToast(`Verified! Confidence: ${(data.confidence * 100).toFixed(1)}%`, 'success');
-                    stopScanner(); // Stop camera after success
-                    setStep(3.5); // Show success screen
-                } else {
-                    setFaceVerified(false);
-                    // Use the detailed error from backend if available
-                    const errMsg = data.error || data.message || "Face Mismatch. Try Again.";
-                    addToast(errMsg, 'error');
-                    // Go back to step 2 after delay
-                    setTimeout(() => setStep(2), 2000);
-                }
-
-            } catch (err) {
-                console.error(err);
-                addToast("Verification Failed: Network Error", 'error');
-                setStep(2);
-            }
-        };
-
-        if (step === 3 && isScanning) {
-            // Wait 2s for user to align face, then capture
-            captureTimer = setTimeout(captureFace, 2000);
-        }
-
-        return () => clearTimeout(captureTimer);
-    }, [step, isScanning]);
-
-    // Effect: Handle Step 3.5 (Verification Success) -> Step 4 (Payment)
-    useEffect(() => {
-        if (step === 3.5) {
-            const timer = setTimeout(() => {
-                setStep(4);
-            }, 1500); // Show success message for 1.5s then move to payment
+        if (step === 3 && isScanning && !scanError) {
+            const timer = setTimeout(captureFace, 2000); // Auto-capture after 2s
             return () => clearTimeout(timer);
         }
-    }, [step]);
+    }, [step, isScanning]);
 
-    // --- DISPENSE LOGIC ---
+    const captureFace = async () => {
+        if (!videoRef.current) return;
+        const canvas = document.createElement("canvas");
+        canvas.width = videoRef.current.videoWidth;
+        canvas.height = videoRef.current.videoHeight;
+        canvas.getContext("2d").drawImage(videoRef.current, 0, 0);
+        const liveImage = canvas.toDataURL("image/jpeg");
+
+        try {
+            const res = await fetch(`${API_URL}/verify-face`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cardId: scannedData.card, liveImage, memberId: selectedMemberId })
+            });
+            const data = await res.json();
+
+            if (data.success && data.authenticated) {
+                stopScanner();
+                setStep(3.5); // Success Pulse
+                setTimeout(() => setStep(4), 1500); // To Payment
+            } else {
+                addToast(data.message || "Face Mismatch", 'error');
+                setTimeout(() => setStep(2), 1500); // Back to Details
+            }
+        } catch (err) {
+            addToast("Auth Error", 'error');
+            setStep(2);
+        }
+    };
+
+    // --- LOGIC: DISPENSE ---
     const handleDispense = async () => {
-        setDispensing(true);
+        setIsProcessing(true);
         try {
             const payload = {
                 cardId: scannedData.card,
@@ -380,444 +198,235 @@ const ScanDispense = () => {
             });
 
             if (res.ok) {
-                // Send hardware dispense command
-                // Determine which grain to dispense (prioritize rice if both selected)
-                let grainType = 1; // 1 = Rice, 2 = Dal
-                let weight = 0;
-
-                if (selectedRations.rice && rationDetails.rice > 0) {
-                    grainType = 1; // Rice
-                    weight = rationDetails.rice * 1000; // Convert kg to grams
-                } else if (selectedRations.dhal && rationDetails.dhal > 0) {
-                    grainType = 2; // Dal
-                    weight = rationDetails.dhal * 1000; // Convert kg to grams
-                }
-
-                // Send to ESP8266
-                try {
-                    const hardwareRes = await fetch(`${API_URL}/hardware/dispense`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ grainType, weight })
-                    });
-
-                    if (!hardwareRes.ok) {
-                        console.warn('[Hardware] Dispense command failed, but transaction recorded');
-                        addToast('Hardware not connected. Please dispense manually.', 'warning');
-                    } else {
-                        addToast('Dispensing started...', 'success');
-                    }
-                } catch (hardwareErr) {
-                    console.error('[Hardware] Error:', hardwareErr);
-                    addToast('Hardware error. Please dispense manually.', 'warning');
-                }
-
-                // Remove fixed timeout - wait for socket event
-                // setTimeout(() => {
-                //    setStep(5);
-                //    setDispensing(false);
-                // }, 2000);
+                setStep(5);
+                addToast("Dispense Successful", 'success');
             } else {
-                throw new Error("Validation Failed");
+                throw new Error("Failed");
             }
         } catch (err) {
             addToast("Dispense Failed", 'error');
-            setDispensing(false);
+        } finally {
+            setIsProcessing(false);
         }
     };
 
-    const resetFlow = () => {
-        setStep(1);
-        setScannedData(null);
-        setFaceVerified(false);
-        setRationDetails({ rice: 0, dhal: 0, cost: 0, maxRice: 0, maxDhal: 0 });
-    };
+    // --- RENDER HELPERS ---
+    const ScanView = () => (
+        <div className="relative w-full aspect-[4/5] bg-black rounded-3xl overflow-hidden border border-slate-200 shadow-inner">
+            <video ref={videoRef} className="w-full h-full object-cover transform scale-x-[-1]" muted playsInline />
 
-    // Manual Tare Handler
-    const handleTare = async () => {
-        try {
-            console.log("Sending Tare Request...");
-            const res = await fetch(`${API_URL}/hardware/tare`, { method: 'POST' });
-            if (res.ok) {
-                const data = await res.json();
-                addToast(data.message || "Scale Reset to 0g", "success");
-                setCurrentWeight(0);
-            } else {
-                const errData = await res.json();
-                throw new Error(errData.error || "Tare Failed (Backend Error)");
-            }
-        } catch (err) {
-            console.error("Tare Error:", err);
-            addToast(`Tare Failed: ${err.message}`, "error");
-        }
-    };
+            {/* Overlay UI */}
+            <div className="absolute inset-0 border-[24px] border-black/30 pointer-events-none rounded-3xl" />
 
-    return (
-        <div className="min-h-screen bg-slate-50 p-4 md:p-6 flex flex-col items-center">
-
-            {/* Header */}
-            <div className="w-full max-w-6xl flex justify-between items-center mb-6 gap-4">
-                <div>
-                    <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600">
-                        Smart PDS Dispenser
-                    </h1>
-                    <p className="text-xs text-slate-500 font-mono">
-                        {currentUser?.shopLocation} | {currentUser?.name}
-                    </p>
+            {/* Guide for Face */}
+            {step === 3 && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="w-64 h-64 rounded-full border-4 border-brand-400/50 shadow-[0_0_50px_rgba(99,102,241,0.3)] animate-pulse" />
+                    <p className="absolute mt-80 text-white font-bold tracking-widest bg-black/50 px-4 py-1 rounded-full backdrop-blur-md">ALIGN FACE</p>
                 </div>
-                <div className="flex items-center gap-3">
+            )}
 
-                    <button onClick={() => navigate('/history')} className="flex items-center gap-2 px-4 py-2 bg-white text-indigo-600 rounded-xl shadow-sm border border-indigo-50 hover:bg-indigo-50 transition-colors">
-                        <Clock size={18} /> History
-                    </button>
-                </div>
-            </div>
-
-            <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-8">
-
-                {/* LEFT: VISUAL / CAMERA */}
-                <div className="lg:col-span-5 flex flex-col gap-4">
-                    <div className="bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-100 aspect-[4/5] relative">
-
-                        {/* 1. QR SCANNER VIEW (Visible in Step 1 OR Step 3 OR if manually scanning) */}
-                        {/* We use 'hidden' class instead of unmounting to keep videoRef stable if needed, but conditional mount is fine if we wait for it */}
-                        {(step === 1 || step === 3 || isScanning) && (
-                            <div className="relative w-full h-full bg-black">
-                                <video ref={videoRef} className="w-full h-full object-cover transform scale-x-[-1]" muted playsInline />
-
-                                <div className="absolute inset-0 border-[24px] border-white/10 rounded-3xl pointer-events-none"></div>
-                                {!isScanning && (
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 text-white z-20">
-                                        <button id="btn-start-scan" onClick={startScanner} className="px-8 py-4 bg-indigo-600 rounded-full font-bold shadow-lg hover:scale-105 transition-transform flex items-center gap-2">
-                                            <Camera /> Start Scanner
-                                        </button>
-                                        <div className="mt-8 flex gap-2">
-                                            <button id="btn-sim-1001" onClick={() => processScan('RC-1001')} className="px-3 py-1 bg-white/20 rounded text-xs">Simulate RC-1001</button>
-                                            <button id="btn-sim-1003" onClick={() => processScan('RC-1003')} className="px-3 py-1 bg-white/20 rounded text-xs">Simulate RC-1003</button>
-                                        </div>
-
-                                    </div>
-                                )}
-                                {isScanning && (
-                                    <>
-                                        <div className="absolute top-4 right-4 flex gap-2 z-20">
-                                            {/* Flash Toggle */}
-                                            {hasFlash && (
-                                                <button
-                                                    onClick={() => {
-                                                        if (scannerRef.current) {
-                                                            scannerRef.current.toggleFlash();
-                                                            setFlashOn(!flashOn);
-                                                        }
-                                                    }}
-                                                    className={`p-3 rounded-full backdrop-blur-md ${flashOn ? 'bg-yellow-400 text-black' : 'bg-black/50 text-white'}`}
-                                                >
-                                                    <Zap size={20} className={flashOn ? 'fill-current' : ''} />
-                                                </button>
-                                            )}
-                                        </div>
-
-                                        {/* Camera Switcher (Bottom Right) */}
-                                        {cameras.length > 1 && (
-                                            <div className="absolute bottom-6 right-6 z-20">
-                                                <select
-                                                    className="bg-black/60 text-white text-xs p-2 rounded-lg border border-white/20 backdrop-blur-md outline-none"
-                                                    value={selectedCamera}
-                                                    onChange={(e) => {
-                                                        setSelectedCamera(e.target.value);
-                                                        if (scannerRef.current) {
-                                                            scannerRef.current.setCamera(e.target.value);
-                                                        }
-                                                    }}
-                                                >
-                                                    {cameras.map(cam => (
-                                                        <option key={cam.id} value={cam.id}>{cam.label || `Camera ${cam.id}`}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                        )}
-
-                                        <button id="btn-stop-scan" onClick={stopScanner} className="absolute bottom-6 left-1/2 -translate-x-1/2 px-6 py-2 bg-red-500/80 text-white rounded-full text-sm backdrop-blur-sm z-20">Stop Camera</button>
-                                    </>
-                                )}
-
-                                {/* Error State */}
-                                {scanError && (
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 text-white p-6 text-center z-10">
-                                        <AlertTriangle size={48} className="text-red-500 mb-4" />
-                                        <p className="font-bold text-lg mb-2 text-red-100">Camera Access Error</p>
-                                        <p className="text-sm text-slate-400 mb-6">{scanError}</p>
-                                        <button onClick={retryScanner} className="px-6 py-2 bg-white text-black rounded-full font-bold hover:bg-slate-200">
-                                            Retry Camera
-                                        </button>
-                                    </div>
-                                )}
-
-                                {/* Step 3: Face Verification Overlay */}
-                                {step === 3 && isScanning && !scanError && (
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 text-white">
-
-                                        {/* Viewfinder Container */}
-                                        <div className="relative flex items-center justify-center">
-
-                                            {/* 1. The Circle (Face Guide) */}
-                                            <div className="w-64 h-64 rounded-full border-2 border-white/50 relative z-10 box-border shadow-[0_0_20px_rgba(0,0,0,0.5)]"></div>
-
-                                            {/* Scanning Animation Line */}
-                                            <div className="absolute w-full h-1 bg-indigo-400/80 top-0 animate-[scan_2s_ease-in-out_infinite] blur-sm"></div>
-                                        </div>
-
-                                        <h3 className="mt-12 text-2xl font-bold text-white shadow-md tracking-wide">VERIFYING FACE</h3>
-                                        <p className="text-indigo-200 font-medium">Align your face within the circle</p>
-                                    </div>
-                                )}
-
-                                {/* Step 3.5: Success Overlay */}
-                                {step === 3.5 && (
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-emerald-600/90 text-white z-20 backdrop-blur-sm">
-                                        <div className="w-32 h-32 bg-white rounded-full flex items-center justify-center mb-6 shadow-xl animate-bounce">
-                                            <ShieldCheck size={64} className="text-emerald-600" />
-                                        </div>
-                                        <h3 className="text-3xl font-bold">Verified!</h3>
-                                        <p className="text-emerald-100 mt-2">Proceeding to payment...</p>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-
-
-                        {/* 2. BENEFICIARY PHOTO VIEW (With Member Selection) */}
-                        {step === 2 && scannedData && (
-                            <div className="w-full h-full p-6 flex flex-col items-center bg-gradient-to-br from-indigo-50 to-white overflow-y-auto">
-                                {/* SELECTED MEMBER PHOTO */}
-                                <div className="w-48 h-48 rounded-full border-4 border-white shadow-xl overflow-hidden mb-4 shrink-0">
-                                    {(() => {
-                                        // Determine which image to show based on selection
-                                        let displayImg = scannedData.image; // Default Head
-                                        if (selectedMemberId !== 'HEAD') {
-                                            const mem = scannedData.members.find(m => m._id === selectedMemberId);
-                                            if (mem && mem.image) displayImg = mem.image;
-                                        }
-
-                                        return displayImg ? (
-                                            <img
-                                                src={displayImg.startsWith('data:') || displayImg.startsWith('http')
-                                                    ? displayImg
-                                                    : `${API_URL.replace('/api', '')}/${displayImg}`}
-                                                className="w-full h-full object-cover"
-                                                alt="Beneficiary"
-                                            />
-                                        ) : (
-                                            <User className="w-full h-full p-8 text-slate-300 bg-slate-100" />
-                                        );
-                                    })()}
-                                </div>
-
-                                <h2 className="text-2xl font-bold text-slate-800 text-center">{scannedData.name}</h2>
-                                <p className="text-slate-500 font-mono mb-2">{scannedData.card}</p>
-
-                                {/* MEMBER SELECTION LIST */}
-                                <div className="w-full mt-4 space-y-2">
-                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Select Person Present</p>
-
-                                    {/* HEAD OPTION */}
-                                    <div
-                                        onClick={() => setSelectedMemberId('HEAD')}
-                                        className={`flex items-center gap-3 p-3 rounded-xl border transition-all cursor-pointer ${selectedMemberId === 'HEAD' ? 'bg-indigo-600 border-indigo-600 text-white shadow-md' : 'bg-white border-slate-200 hover:bg-slate-50'}`}
-                                    >
-                                        <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${selectedMemberId === 'HEAD' ? 'border-white' : 'border-slate-400'}`}>
-                                            {selectedMemberId === 'HEAD' && <div className="w-2 h-2 bg-white rounded-full" />}
-                                        </div>
-                                        <span className="font-bold text-sm">Head: {scannedData.name}</span>
-                                    </div>
-
-                                    {/* FAMILY MEMBERS */}
-                                    {scannedData.members && scannedData.members.map(member => (
-                                        <div
-                                            key={member._id}
-                                            onClick={() => setSelectedMemberId(member._id)}
-                                            className={`flex items-center gap-3 p-3 rounded-xl border transition-all cursor-pointer ${selectedMemberId === member._id ? 'bg-indigo-600 border-indigo-600 text-white shadow-md' : 'bg-white border-slate-200 hover:bg-slate-50'}`}
-                                        >
-                                            <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${selectedMemberId === member._id ? 'border-white' : 'border-slate-400'}`}>
-                                                {selectedMemberId === member._id && <div className="w-2 h-2 bg-white rounded-full" />}
-                                            </div>
-                                            <div className="flex flex-col">
-                                                <span className="font-bold text-sm">{member.name}</span>
-                                                <span className={`text-[10px] ${selectedMemberId === member._id ? 'text-indigo-200' : 'text-slate-500'}`}>{member.relation} ({member.age}y)</span>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-
-                                {scannedData.assignmentWarning && (
-                                    <div className="mt-4 p-3 bg-red-50 text-red-600 text-xs rounded-lg flex gap-2 items-center w-full justify-center">
-                                        <AlertTriangle size={16} /> {scannedData.assignmentWarning}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-
-
-                        {/* 5. DISPENSE SUCCESS */}
-                        {step === 5 && (
-                            <div className="w-full h-full bg-emerald-600 flex flex-col items-center justify-center text-white p-8 text-center">
-                                <div className="w-32 h-32 bg-white/20 rounded-full flex items-center justify-center mb-6 animate-bounce">
-                                    <ShoppingBag size={64} />
-                                </div>
-                                <h2 className="text-3xl font-bold mb-2">Dispensed!</h2>
-                                <p className="opacity-90 mb-8">Please collect the ration items from the dispenser tray.</p>
-                                <button onClick={resetFlow} className="px-8 py-3 bg-white text-emerald-700 rounded-xl font-bold shadow-lg hover:bg-emerald-50">
-                                    Next Customer
-                                </button>
-                            </div>
-                        )}
+            {!isScanning && (
+                <div className="absolute inset-0 bg-slate-900 rounded-3xl flex flex-col items-center justify-center text-white">
+                    <Camera size={64} className="mb-6 opacity-50" />
+                    <Button onClick={startScanner} className="bg-teal-600 text-white hover:bg-teal-700 shadow-lg shadow-teal-500/30 px-8 py-4 rounded-full text-lg font-bold transition-transform hover:scale-105">
+                        Start Camera
+                    </Button>
+                    {/* Simulations */}
+                    <div className="mt-8 flex gap-2 opacity-50">
+                        <button onClick={() => processScan('RC-1001')} className="text-xs bg-white/10 px-2 py-1 rounded">Sim 1001</button>
+                        <button onClick={() => processScan('RC-1003')} className="text-xs bg-white/10 px-2 py-1 rounded">Sim 1003</button>
                     </div>
                 </div>
+            )}
 
-                {/* RIGHT: CONTROLS & INFO */}
+            {scanError && (
+                <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center text-red-500 p-8 text-center">
+                    <AlertTriangle size={48} className="mb-4" />
+                    <p>{scanError}</p>
+                    <Button variant="outline" className="mt-4 border-red-500 text-red-500" onClick={() => startScanner()}>Retry</Button>
+                </div>
+            )}
+        </div>
+    );
+
+    return (
+        <div className="min-h-screen bg-slate-50 p-6 font-sans">
+            {/* Header */}
+            <div className="max-w-6xl mx-auto flex justify-between items-center mb-10">
+                <div>
+                    <h1 className="text-2xl font-bold text-slate-900">Distribution Console</h1>
+                    <p className="text-slate-500 text-sm">Operator: <span className="font-semibold text-brand-600">{currentUser?.name}</span></p>
+                </div>
+                <Button variant="outline" onClick={() => navigate('/history')} className="gap-2">
+                    <Clock size={16} /> History
+                </Button>
+            </div>
+
+            <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
+
+                {/* LEFT COLUMN: SCANNER & VISUALS */}
+                <div className="lg:col-span-5 flex flex-col gap-6">
+                    {/* Scanner Viewport */}
+                    {(step === 1 || step === 3 || isScanning) && <ScanView />}
+
+                    {/* Beneficiary Profile (Visible after scan) */}
+                    {(step >= 2 && step < 5) && scannedData && (
+                        <Card className="p-6 bg-white border-brand-100 shadow-lg relative overflow-hidden">
+                            <div className="absolute top-0 left-0 w-full h-24 bg-gradient-to-r from-brand-500 to-indigo-600 opacity-10" />
+                            <div className="relative z-10 flex flex-col items-center -mt-2">
+                                <div className="w-24 h-24 rounded-full border-4 border-white shadow-md overflow-hidden bg-slate-100">
+                                    <img
+                                        src={scannedData.image || ''}
+                                        onError={(e) => e.target.src = 'https://ui-avatars.com/api/?name=User'}
+                                        alt="User"
+                                        className="w-full h-full object-cover"
+                                    />
+                                </div>
+                                <h2 className="text-xl font-bold mt-4">{scannedData.name}</h2>
+                                <p className="text-sm text-slate-500 font-mono bg-slate-100 px-2 py-1 rounded mt-1">{scannedData.card}</p>
+                            </div>
+
+                            {/* Member Selector */}
+                            <div className="mt-6 space-y-2">
+                                <p className="text-xs font-bold text-slate-400 uppercase">Select Member Present</p>
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        onClick={() => setSelectedMemberId('HEAD')}
+                                        className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${selectedMemberId === 'HEAD' ? 'bg-brand-600 text-white shadow-md' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+                                    >
+                                        Head ({scannedData.name})
+                                    </button>
+                                    {scannedData.members.map(m => (
+                                        <button
+                                            key={m._id}
+                                            onClick={() => setSelectedMemberId(m._id)}
+                                            className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${selectedMemberId === m._id ? 'bg-brand-600 text-white shadow-md' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+                                        >
+                                            {m.name} ({m.age}y)
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </Card>
+                    )}
+
+                    {/* Success State */}
+                    {step === 5 && (
+                        <Card className="p-10 bg-emerald-600 text-white text-center flex flex-col items-center justify-center h-full min-h-[400px]">
+                            <div className="w-24 h-24 bg-white/20 rounded-full flex items-center justify-center mb-6 animate-bounce">
+                                <ShoppingBag size={48} />
+                            </div>
+                            <h2 className="text-3xl font-bold mb-2">Dispensed!</h2>
+                            <p className="text-emerald-100 mb-8">Transaction recorded successfully.</p>
+                            <Button onClick={() => { setStep(1); setScannedData(null); }} className="bg-white text-emerald-800 hover:bg-emerald-50 w-full">
+                                Process Next
+                            </Button>
+                        </Card>
+                    )}
+                </div>
+
+                {/* RIGHT COLUMN: CONTROLS */}
                 <div className="lg:col-span-7 flex flex-col gap-6">
 
-                    {/* Step 2: Ration Selection */}
-                    {step === 2 && scannedData && (
-                        <div className="bg-white p-8 rounded-3xl shadow-lg border border-slate-100">
-                            <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2">
-                                <FileText size={24} className="text-indigo-600" /> Ration Entitlement
-                            </h3>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-                                {/* Rice Card */}
-                                <div className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${selectedRations.rice ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-indigo-200'}`}
-                                    onClick={() => setSelectedRations(p => ({ ...p, rice: !p.rice }))}
-                                >
-                                    <div className="flex justify-between items-start mb-2">
-                                        <span className="font-bold text-slate-700">Rice (Raw)</span>
-                                        {selectedRations.rice && <CheckCircle size={20} className="text-indigo-600" />}
-                                    </div>
-                                    <div className="text-3xl font-bold text-indigo-900 mb-1">{selectedRations.rice ? (rationDetails.maxRice || 0).toFixed(2) : 0} <span className="text-sm font-normal text-slate-500">kg</span></div>
-                                    <div className="text-xs text-slate-500">RATE: ₹100/kg</div>
-                                </div>
-
-                                {/* Dhal Card */}
-                                <div className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${selectedRations.dhal ? 'border-orange-500 bg-orange-50' : 'border-slate-200 hover:border-orange-200'}`}
-                                    onClick={() => setSelectedRations(p => ({ ...p, dhal: !p.dhal }))}
-                                >
-                                    <div className="flex justify-between items-start mb-2">
-                                        <span className="font-bold text-slate-700">Toor Dhal</span>
-                                        {selectedRations.dhal && <CheckCircle size={20} className="text-orange-600" />}
-                                    </div>
-                                    <div className="text-3xl font-bold text-indigo-900 mb-1">{selectedRations.dhal ? (rationDetails.maxDhal || 0).toFixed(2) : 0} <span className="text-sm font-normal text-slate-500">kg</span></div>
-                                    <div className="text-xs text-slate-500">RATE: ₹200/kg</div>
-                                </div>
-                            </div>
-
-                            <div className="bg-slate-900 text-white p-6 rounded-2xl flex justify-between items-center shadow-xl">
-                                <div>
-                                    <p className="text-slate-400 text-sm mb-1">Total Payable Amount</p>
-                                    <p className="text-3xl font-bold">₹ {(rationDetails.cost || 0).toFixed(2)}</p>
-                                </div>
-                                <button id="btn-verify-pay" onClick={startFaceAuth} className="px-6 py-3 bg-indigo-500 hover:bg-indigo-400 text-white rounded-xl font-bold shadow-lg shadow-indigo-500/30 transition-all flex items-center gap-2">
-                                    <ShieldCheck size={20} /> Verify & Pay
-                                </button>
-                            </div>
+                    {step === 1 && (
+                        <div className="h-full flex flex-col items-center justify-center opacity-30">
+                            <Camera size={64} className="text-slate-400 mb-4" />
+                            <p className="text-xl font-bold text-slate-400">Scan Card to Begin</p>
                         </div>
                     )}
 
-                    {/* Step 4: Payment */}
-                    {step === 4 && (
-                        <div className="bg-white p-8 rounded-3xl shadow-lg border border-slate-100">
-                            <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2">
-                                <Banknote size={24} className="text-emerald-600" /> Payment Interface
+                    {step === 2 && (
+                        <Card className="p-8">
+                            <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
+                                <ShoppingBag className="text-brand-600" size={24} /> Ration Entitlement
+                            </h3>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                                <div
+                                    onClick={() => setSelectedRations(p => ({ ...p, rice: !p.rice }))}
+                                    className={`p-5 rounded-2xl border-2 cursor-pointer transition-all ${selectedRations.rice ? 'border-brand-500 bg-brand-50' : 'border-slate-100 hover:border-slate-200'}`}
+                                >
+                                    <div className="flex justify-between mb-2">
+                                        <span className="font-bold text-slate-700">Rice</span>
+                                        {selectedRations.rice && <CheckCircle size={20} className="text-brand-600" />}
+                                    </div>
+                                    <p className="text-3xl font-bold text-brand-900">{(rationDetails.maxRice || 0).toFixed(1)} <span className="text-sm opacity-50">kg</span></p>
+                                    <p className="text-xs text-slate-400 mt-1">₹100 / kg</p>
+                                </div>
+
+                                <div
+                                    onClick={() => setSelectedRations(p => ({ ...p, dhal: !p.dhal }))}
+                                    className={`p-5 rounded-2xl border-2 cursor-pointer transition-all ${selectedRations.dhal ? 'border-orange-500 bg-orange-50' : 'border-slate-100 hover:border-slate-200'}`}
+                                >
+                                    <div className="flex justify-between mb-2">
+                                        <span className="font-bold text-slate-700">Dhal</span>
+                                        {selectedRations.dhal && <CheckCircle size={20} className="text-orange-600" />}
+                                    </div>
+                                    <p className="text-3xl font-bold text-orange-900">{(rationDetails.maxDhal || 0).toFixed(1)} <span className="text-sm opacity-50">kg</span></p>
+                                    <p className="text-xs text-slate-400 mt-1">₹200 / kg</p>
+                                </div>
+                            </div>
+
+                            <div className="bg-slate-900 p-6 rounded-2xl text-white flex justify-between items-center shadow-xl">
+                                <div>
+                                    <p className="text-slate-400 text-xs uppercase tracking-wider">Total Amount</p>
+                                    <p className="text-3xl font-bold">₹ {(rationDetails.cost || 0).toFixed(0)}</p>
+                                </div>
+                                <Button onClick={startFaceAuth} className="bg-brand-500 hover:bg-brand-400 text-white px-8">
+                                    Verify Biometric <ArrowRight size={18} className="ml-2" />
+                                </Button>
+                            </div>
+                        </Card>
+                    )}
+
+                    {(step === 4 || step === 3.5) && (
+                        <Card className="p-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                            <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
+                                <Banknote className="text-emerald-600" size={24} /> Payment
                             </h3>
 
                             <div className="flex gap-4 mb-8">
                                 <button
-                                    id="btn-pay-cash"
                                     onClick={() => setPaymentMode('Cash')}
-                                    className={`flex-1 py-4 rounded-2xl border-2 font-bold flex flex-col items-center gap-2 transition-all ${paymentMode === 'Cash' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-100 text-slate-400'}`}
+                                    className={`flex-1 p-4 rounded-xl border-2 font-bold flex flex-col items-center gap-2 transition-all ${paymentMode === 'Cash' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-100 text-slate-400 hover:bg-slate-50'}`}
                                 >
-                                    <Banknote size={32} /> Cash Payment
+                                    <Banknote size={24} /> Cash
                                 </button>
                                 <button
                                     onClick={() => setPaymentMode('UPI')}
-                                    className={`flex-1 py-4 rounded-2xl border-2 font-bold flex flex-col items-center gap-2 transition-all ${paymentMode === 'UPI' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-100 text-slate-400'}`}
+                                    className={`flex-1 p-4 rounded-xl border-2 font-bold flex flex-col items-center gap-2 transition-all ${paymentMode === 'UPI' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-100 text-slate-400 hover:bg-slate-50'}`}
                                 >
-                                    <Zap size={32} /> UPI / QR
+                                    <Zap size={24} /> UPI
                                 </button>
                             </div>
 
                             {paymentMode === 'Cash' ? (
-                                <div className="text-center p-8 bg-slate-50 rounded-2xl border border-slate-200 mb-8">
-                                    <p className="text-slate-500 mb-2">Collect Cash from Beneficiary</p>
-                                    <p className="text-5xl font-bold text-slate-800">₹ {rationDetails.cost}</p>
+                                <div className="text-center p-8 bg-emerald-50/50 rounded-2xl border border-emerald-100 mb-8">
+                                    <p className="text-emerald-800 font-medium">Collect from Beneficiary</p>
+                                    <p className="text-5xl font-bold text-slate-900 mt-2">₹ {rationDetails.cost}</p>
                                 </div>
                             ) : (
-                                <div className="text-center p-8 bg-blue-50 rounded-2xl border border-blue-100 mb-8 flex flex-col items-center">
-                                    <div className="w-48 h-48 bg-white p-2 rounded-xl shadow-sm mb-4">
-                                        {/* Placeholder QR */}
-                                        <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=upi://pay?pa=jeys.rajasekar@okaxis&pn=SmartPDS&am=${rationDetails.cost}`} className="w-full h-full" />
+                                <div className="flex flex-col items-center justify-center p-6 bg-blue-50/50 rounded-2xl border border-blue-100 mb-8">
+                                    <div className="bg-white p-2 rounded-lg shadow-sm mb-4">
+                                        <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=upi://pay?pa=shop@okaxis&am=${rationDetails.cost}`} className="w-32 h-32" />
                                     </div>
-                                    <p className="font-bold text-blue-800">Scan to Pay ₹ {rationDetails.cost}</p>
+                                    <p className="text-blue-800 font-bold">Scan to Pay ₹ {rationDetails.cost}</p>
                                 </div>
                             )}
 
-                            <div className="mb-6 p-4 bg-slate-100 rounded-xl border border-slate-200 flex items-center justify-between">
-                                <div>
-                                    <p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
-                                        Live Scale {scaleConnected ? <span className="text-emerald-600 font-bold">● ONLINE</span> : <span className="text-red-500 font-bold">● OFFLINE</span>}
-                                    </p>
-                                    <p className={`text-3xl font-mono font-bold ${scaleConnected ? 'text-slate-800' : 'text-slate-400'}`}>
-                                        {currentWeight.toFixed(1)} <span className="text-sm text-slate-500">g</span>
-                                    </p>
-                                </div>
-                                <button
-                                    onClick={handleTare}
-                                    className={`px-6 py-3 border rounded-xl font-bold text-sm flex items-center gap-2 transition-all shadow-sm active:scale-95 ${scaleConnected ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50' : 'bg-slate-200 border-slate-200 text-slate-400 opacity-80'}`}
-                                >
-                                    <Scale size={18} /> TARE
-                                </button>
-                            </div>
-
-                            <button
-                                id="btn-confirm-dispense"
+                            <Button
                                 onClick={handleDispense}
-                                disabled={dispensing || visionStatus.status !== 'safe'}
-                                className={`w-full py-4 rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 transition-all 
-                                    ${visionStatus.status === 'danger' ? 'bg-red-500 text-white cursor-not-allowed' :
-                                        visionStatus.status === 'warning' ? 'bg-orange-500 text-white cursor-not-allowed' :
-                                            'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/30'} 
-                                    disabled:opacity-70 disabled:cursor-not-allowed`}
+                                isLoading={isProcessing}
+                                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/30 py-4 text-lg"
                             >
-                                {visionStatus.status === 'danger' ? <AlertTriangle className="animate-pulse" /> :
-                                    visionStatus.status === 'warning' ? <AlertTriangle /> :
-                                        dispensing ? <RefreshCw className="animate-spin" /> : <ShoppingBag />}
-
-                                {visionStatus.status === 'danger' ? 'HAND DETECTED - STOP!' :
-                                    visionStatus.status === 'warning' ? 'PLACE BAG PROPERLY' :
-                                        dispensing ? 'Processing Dispense...' : 'Confirm Payment & Dispense'}
-                            </button>
-
-                            {/* Vision Alert Overlay */}
-                            {visionStatus.status !== 'safe' && step === 4 && (
-                                <div className={`mt-4 p-4 rounded-xl flex items-center gap-3 animate-pulse border ${visionStatus.status === 'danger' ? 'bg-red-100 border-red-300 text-red-700' : 'bg-orange-100 border-orange-300 text-orange-800'}`}>
-                                    <AlertTriangle size={24} />
-                                    <span className="font-bold">{visionStatus.message}</span>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {/* Pending State for Step 1 */}
-                    {step === 1 && (
-                        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 h-full flex flex-col items-center justify-center text-center opacity-60">
-                            <Camera size={48} className="text-slate-300 mb-4" />
-                            <p className="text-slate-400 font-medium">Waiting for Beneficiary...</p>
-                        </div>
+                                Confirm & Dispense
+                            </Button>
+                        </Card>
                     )}
                 </div>
             </div>
-        </div >
+        </div>
     );
 };
 
