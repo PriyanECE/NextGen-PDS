@@ -1,0 +1,8 @@
+{
+  "build": {
+    "commands": [
+      "npm install",
+      "pip install -r requirements.txt"
+    ]
+  }
+}
