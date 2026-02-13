@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: smart-pds-mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: change-this-password
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    networks:
+      - smart-pds-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: smart-pds-backend
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      - MONGO_URI=mongodb://admin:change-this-password@mongodb:27017/smart-pds?authSource=admin
+      - JWT_SECRET=${JWT_SECRET:-SmartPDS_SecureKey_2026_ProductionGrade_DO_NOT_SHARE_THIS_KEY_EVER_256bit_Security}
+      - PORT=5000
+      - NODE_ENV=production
+      - LIVENESS_THRESHOLD=0.6
+    depends_on:
+      - mongodb
+    networks:
+      - smart-pds-network
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+      - /app/.venv
+      - deepface_weights:/root/.deepface
+
+  frontend:
+    image: nginx:alpine
+    container_name: smart-pds-frontend
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+    networks:
+      - smart-pds-network
+
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+  deepface_weights:
+    driver: local
+
+networks:
+  smart-pds-network:
+    driver: bridge

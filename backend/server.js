@@ -13,6 +13,12 @@ const forge = require('node-forge');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 
+// --- PYTHON PATH CONFIGURATION ---
+// Use venv Python if available, otherwise fall back to system Python
+const venvPythonPath = path.join(__dirname, '.venv', 'bin', 'python');
+const PYTHON_CMD = fs.existsSync(venvPythonPath) ? venvPythonPath : 'python3';
+console.log(`Using Python: ${PYTHON_CMD}`);
+
 const app = express();
 
 // --- HTTPS CERTIFICATE GENERATION ---
@@ -279,7 +285,7 @@ class FaceService {
     start() {
         console.log("[FaceService] Starting persistent Python process...");
         const scriptPath = path.join(__dirname, 'deepface_service.py');
-        this.process = spawn('python', [scriptPath], {
+        this.process = spawn(PYTHON_CMD, [scriptPath], {
             stdio: ['pipe', 'pipe', 'pipe']
         });
 
@@ -347,7 +353,19 @@ class FaceService {
 
 const faceService = new FaceService();
 
-
+// --- HEALTH CHECK ---
+app.get('/api/health', (req, res) => {
+    res.status(200).json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+        services: {
+            faceService: faceService.process ? 'running' : 'stopped',
+            ttsService: ttsService ? (ttsService.process ? 'running' : 'stopped') : 'initializing'
+        }
+    });
+});
 
 // --- AUTH ---
 app.post('/api/auth/login', async (req, res) => {
@@ -1266,7 +1284,7 @@ class TTSService {
     start() {
         console.log("[TTSService] Starting persistent Python process...");
         const scriptPath = path.join(__dirname, 'tts_service.py');
-        this.process = spawn('python', [scriptPath, '--persistent'], {
+        this.process = spawn(PYTHON_CMD, [scriptPath, '--persistent'], {
             stdio: ['pipe', 'pipe', 'pipe']
         });
 
