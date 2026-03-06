@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,43 +16,99 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.foundation.background
+import com.example.nextgen_pds_kiosk.ui.components.VisionCameraPreview
+import com.example.nextgen_pds_kiosk.vision.VisionState
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.nextgen_pds_kiosk.voice.AppIntent
+import com.example.nextgen_pds_kiosk.viewmodel.DispenserState
 import com.example.nextgen_pds_kiosk.viewmodel.DispenserViewModel
-import kotlinx.coroutines.delay
 
+@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun DispensingScreen(
-    onNavigateNext: () -> Unit,
-    viewModel: DispenserViewModel = hiltViewModel()
+    viewModel: DispenserViewModel = hiltViewModel(),
+    onNavigateNext: () -> Unit
 ) {
     // Intercept hardware back button to prevent escaping the active dispense loop
     androidx.activity.compose.BackHandler(true) {
-        // Do nothing (block back navigation)
+        // Do nothing (block back navigation during active dispense)
     }
 
-    // Dummy progression state simulating ESP32 load cell feedback
-    var currentWeightKg by remember { mutableFloatStateOf(0f) }
-    val targetWeightKg = 5f // Hardcoded target for layout testing
-    val progress = currentWeightKg / targetWeightKg
-    
+    // Real-time weight from ViewModel (polled from ESP8266 /status endpoint)
+    val currentWeightKg by viewModel.currentWeightKg.collectAsState()
+    val targetWeightKg  by viewModel.targetWeightKg.collectAsState()
+    val uiState         by viewModel.uiState.collectAsState()
+
+    // Safety Vision State
+    var visionState by remember { mutableStateOf(VisionState.BAG_DETECTED) }
+
+    // Camera Permission for Vision
+    val cameraPermissionState = rememberPermissionState(
+        permission = android.Manifest.permission.CAMERA
+    )
+
+    LaunchedEffect(Unit) {
+        if (!cameraPermissionState.status.isGranted) {
+            cameraPermissionState.launchPermissionRequest()
+        }
+    }
+
+    // Safe progress — avoid divide-by-zero if target not yet set
+    val progress = if (targetWeightKg > 0f) (currentWeightKg / targetWeightKg).coerceIn(0f, 1f) else 0f
+
     // Hardware control state
     var isPaused by remember { mutableStateOf(false) }
 
-    // Simulate dummy hardware dispensing over 5 seconds
-    LaunchedEffect(isPaused) {
-        if (!isPaused) {
-            while (currentWeightKg < targetWeightKg && !isPaused) {
-                delay(100)
-                currentWeightKg += 0.1f
-                if (currentWeightKg >= targetWeightKg) {
-                    currentWeightKg = targetWeightKg
-                    delay(1000) // Brief pause to show 100% completion before moving
-                    onNavigateNext()
-                }
+    // Voice assistant lifecycle for this screen
+    val currentIntent by viewModel.voiceManager.currentIntent.collectAsState()
+    DisposableEffect(Unit) {
+        viewModel.voiceManager.startListening()
+        onDispose { viewModel.onLeavingScreen() }
+    }
+
+    // Voice intent handling
+    LaunchedEffect(currentIntent) {
+        when (currentIntent) {
+            AppIntent.PAUSE_DISPENSING -> {
+                isPaused = true
+                viewModel.pauseDispensing()
             }
+            AppIntent.RESUME_DISPENSING -> {
+                isPaused = false
+                viewModel.resumeDispensing()
+            }
+            AppIntent.NAVIGATE_BACK -> { // Mapping voice "stop/go back" to stop dispensing
+                viewModel.stopDispensing()
+                onNavigateNext()
+            }
+            else -> {}
+        }
+    }
+
+    // Auto-stop logic if safety rule violated
+    LaunchedEffect(visionState) {
+        if (uiState is DispenserState.Dispensing && !isPaused) {
+            if (visionState == VisionState.HANDS_DETECTED || visionState == VisionState.NO_BAG) {
+                // Instantly send the PAUSE command to the ESP8266 servo via the ViewModel API
+                viewModel.pauseDispensing()
+                isPaused = true
+            }
+        }
+    }
+
+    // Navigate to Completion when hardware finishes
+    LaunchedEffect(uiState) {
+        if (uiState is DispenserState.Completed) {
+            onNavigateNext()
         }
     }
 
@@ -62,7 +119,7 @@ fun DispensingScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        
+
         // Dispensing Header
         Text(
             text = "Dispensing...",
@@ -74,23 +131,59 @@ fun DispensingScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Safety Status & Dynamic Camera Warning
+        val warningText = when (visionState) {
+            VisionState.HANDS_DETECTED -> "DANGER: Hands Detected! Motor PAUSED."
+            VisionState.NO_BAG -> "WARNING: Bag Removed! Motor PAUSED."
+            VisionState.BAG_DETECTED -> "Please do not remove the bag until the process is fully completed."
+            VisionState.IDLE -> "Monitoring Area..."
+        }
+        
+        val warningColor = when (visionState) {
+            VisionState.HANDS_DETECTED, VisionState.NO_BAG -> Color.Red
+            else -> com.example.nextgen_pds_kiosk.ui.theme.WarningYellow
+        }
+
         Text(
-            text = "Please do not remove the bag until the process is fully completed.",
+            text = warningText,
             style = MaterialTheme.typography.titleLarge.copy(
-                color = com.example.nextgen_pds_kiosk.ui.theme.WarningYellow
+                fontWeight = if (visionState != VisionState.BAG_DETECTED) FontWeight.Bold else FontWeight.Normal,
+                color = warningColor
             ),
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 32.dp)
         )
 
-        Spacer(modifier = Modifier.height(64.dp))
+        Spacer(modifier = Modifier.height(24.dp))
+        
+        // Advanced Safety Vision Verification Camera Box (Small PIP size for continuous monitoring)
+        Box(
+            modifier = Modifier
+                .size(160.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            if (cameraPermissionState.status.isGranted) {
+                VisionCameraPreview(
+                    modifier = Modifier.fillMaxSize(),
+                    onVisionStateChanged = { newState ->
+                        visionState = newState
+                    }
+                )
+            } else {
+                Icon(Icons.Default.Warning, contentDescription = "Camera Access Required", tint = Color.Yellow)
+            }
+        }
 
-        // Large 3D Progress Ring simulating grains
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // Large 3D Progress Ring showing real load cell data
         Box(
             modifier = Modifier.size(340.dp),
             contentAlignment = Alignment.Center
         ) {
-            
+
             // Background track
             Canvas(modifier = Modifier.fillMaxSize()) {
                 drawArc(
@@ -101,14 +194,14 @@ fun DispensingScreen(
                     style = Stroke(width = 24.dp.toPx(), cap = StrokeCap.Round)
                 )
             }
-            
+
             // Foreground animated progress
             val animatedProgress by animateFloatAsState(
                 targetValue = progress,
-                animationSpec = tween(durationMillis = 100, easing = LinearEasing),
+                animationSpec = tween(durationMillis = 400, easing = LinearEasing),
                 label = "progress_animation"
             )
-            
+
             Canvas(modifier = Modifier.fillMaxSize()) {
                 drawArc(
                     color = com.example.nextgen_pds_kiosk.ui.theme.PrimaryAccent,
@@ -119,10 +212,10 @@ fun DispensingScreen(
                 )
             }
 
-            // Central readouts
+            // Central readouts — real weight from load cell
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = String.format("%.1f", currentWeightKg),
+                    text = String.format("%.2f", currentWeightKg),
                     style = MaterialTheme.typography.displayLarge.copy(
                         fontSize = 80.sp,
                         fontWeight = FontWeight.ExtraBold,
@@ -130,7 +223,7 @@ fun DispensingScreen(
                     )
                 )
                 Text(
-                    text = "of $targetWeightKg kg",
+                    text = "of ${String.format("%.1f", targetWeightKg)} kg",
                     style = MaterialTheme.typography.headlineLarge.copy(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -145,10 +238,10 @@ fun DispensingScreen(
                 )
             }
         }
-        
+
         Spacer(modifier = Modifier.height(80.dp))
-        
-        // Progress percentage readout 
+
+        // Progress percentage readout
         Text(
             text = String.format("%.0f%%", progress * 100),
             style = MaterialTheme.typography.displayMedium.copy(
@@ -156,26 +249,31 @@ fun DispensingScreen(
                 color = MaterialTheme.colorScheme.onSurface
             )
         )
-        
+
         Spacer(modifier = Modifier.height(48.dp))
-        
-        // Pause / Resume Control
-        if (currentWeightKg < targetWeightKg) {
+
+        // Transport Controls — always visible (Pause/Resume & Stop)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Pause / Resume Button
             Button(
-                onClick = { 
+                onClick = {
                     isPaused = !isPaused
-                    if (isPaused) {
-                        viewModel.pauseDispensing()
-                    } else {
-                        viewModel.resumeDispensing()
-                    }
+                    if (isPaused) viewModel.pauseDispensing() else viewModel.resumeDispensing()
                 },
                 modifier = Modifier
-                    .fillMaxWidth(0.5f)
-                    .height(64.dp),
+                    .weight(1f)
+                    .height(64.dp)
+                    .padding(end = 8.dp),
                 shape = RoundedCornerShape(32.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isPaused) com.example.nextgen_pds_kiosk.ui.theme.SuccessGreen else com.example.nextgen_pds_kiosk.ui.theme.WarningYellow
+                    containerColor = if (isPaused)
+                        com.example.nextgen_pds_kiosk.ui.theme.SuccessGreen
+                    else
+                        com.example.nextgen_pds_kiosk.ui.theme.WarningYellow
                 )
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -184,13 +282,46 @@ fun DispensingScreen(
                         contentDescription = if (isPaused) "Resume" else "Pause",
                         tint = if (isPaused) Color.White else Color.Black
                     )
-                    Spacer(modifier = Modifier.width(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = if (isPaused) "RESUME" else "PAUSE",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold,
                             color = if (isPaused) Color.White else Color.Black,
-                            letterSpacing = 2.sp
+                            letterSpacing = 1.sp
+                        )
+                    )
+                }
+            }
+
+            // STOP button — always visible, always works
+            Button(
+                onClick = {
+                    viewModel.stopDispensing()
+                    onNavigateNext()
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(64.dp)
+                    .padding(start = 8.dp),
+                shape = RoundedCornerShape(32.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Stop,
+                        contentDescription = "Stop",
+                        tint = Color.White
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "STOP",
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            letterSpacing = 1.sp
                         )
                     )
                 }

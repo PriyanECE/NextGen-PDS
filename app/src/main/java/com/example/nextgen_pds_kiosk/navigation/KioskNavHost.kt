@@ -106,12 +106,16 @@ fun KioskNavHost(
         composable(route = Screen.Completion.route) {
             CompletionScreen(
                 onGoHome = {
+                    // popUpTo(0) clears the ENTIRE back stack, then we navigate to Welcome fresh.
+                    // Using popUpTo(Welcome) { inclusive = true } was removing Welcome *before*
+                    // navigating to it, resulting in a blank screen.
                     navController.navigate(Screen.Welcome.route) {
-                        popUpTo(Screen.Welcome.route) { inclusive = true }
+                        popUpTo(0) { inclusive = true }
                     }
                 }
             )
         }
+
 
         // ── ADMIN LOGIN ───────────────────────────────────────────────────────
         composable(route = Screen.AdminLogin.route) {

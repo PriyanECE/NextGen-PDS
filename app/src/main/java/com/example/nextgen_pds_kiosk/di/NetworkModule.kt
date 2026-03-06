@@ -16,8 +16,8 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
 
-    // Default IP of ESP32 when running in SoftAP mode
-    private const val ESP32_BASE_URL = "http://192.168.4.1/"
+    // Base default IP of ESP8266 when connected to Android Mobile Hotspot
+    private const val DEFAULT_ESP8266_URL = "http://192.168.43.100/"
 
     @Provides
     @Singleton
@@ -34,9 +34,15 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideRetrofit(okHttpClient: OkHttpClient): Retrofit {
+    fun provideRetrofit(
+        okHttpClient: OkHttpClient,
+        @dagger.hilt.android.qualifiers.ApplicationContext context: android.content.Context
+    ): Retrofit {
+        val sharedPrefs = context.getSharedPreferences("kiosk_settings", android.content.Context.MODE_PRIVATE)
+        val dynamicBaseUrl = sharedPrefs.getString("esp8266_ip", DEFAULT_ESP8266_URL) ?: DEFAULT_ESP8266_URL
+
         return Retrofit.Builder()
-            .baseUrl(ESP32_BASE_URL)
+            .baseUrl(dynamicBaseUrl)
             .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()

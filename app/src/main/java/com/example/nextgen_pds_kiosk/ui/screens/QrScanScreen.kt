@@ -31,6 +31,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.nextgen_pds_kiosk.ui.components.KioskTopAppBar
 import com.example.nextgen_pds_kiosk.ui.theme.*
+import com.example.nextgen_pds_kiosk.voice.AppIntent
 import com.example.nextgen_pds_kiosk.viewmodel.QrScanState
 import com.example.nextgen_pds_kiosk.viewmodel.QrScanViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
@@ -75,6 +76,21 @@ fun QrScanScreen(
             onCardFound(cardNo)
             viewModel.resetScan()
         }
+    }
+
+    // Voice intent handler
+    val currentIntent by viewModel.voiceManager.currentIntent.collectAsState()
+    LaunchedEffect(currentIntent) {
+        when (currentIntent) {
+            AppIntent.NAVIGATE_BACK -> onNavigateBack()
+            else -> {}
+        }
+    }
+
+    // Voice mic lifecycle
+    DisposableEffect(Unit) {
+        viewModel.voiceManager.startListening()
+        onDispose { viewModel.voiceManager.stopListening() }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(DarkBackground)) {

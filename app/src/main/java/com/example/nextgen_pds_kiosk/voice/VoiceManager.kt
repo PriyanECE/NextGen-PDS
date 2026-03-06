@@ -54,8 +54,10 @@ class VoiceManager @Inject constructor(
     private var isRecognizerBusy = false
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // Offline mode: true by default, flips to false if offline pack is missing (error 12)
-    private var useOfflineMode = true
+    // Always prefer offline mode (no internet needed). Android SpeechRecognizer will
+    // automatically downgrade to network if offline language pack is not installed.
+    // We never permanently disable offline mode.
+    private val useOfflineMode = true
 
     // State Flows exposed to ViewModels/UI
     private val _isListening = MutableStateFlow(false)
@@ -86,6 +88,16 @@ class VoiceManager @Inject constructor(
         tts = TextToSpeech(context, this)
         // SpeechRecognizer MUST be created on the Main thread
         mainHandler.post { initSpeechRecognizer() }
+        // NOTE: startListening() is NOT called here.
+        // MainActivity calls onPermissionGranted() after RECORD_AUDIO is confirmed.
+    }
+
+    /** Called by MainActivity once RECORD_AUDIO permission is confirmed. */
+    fun onPermissionGranted() {
+        mainHandler.post {
+            Log.i("VoiceManager", "Permission confirmed — activating microphone")
+            startListening()
+        }
     }
 
     override fun onInit(status: Int) {
@@ -168,20 +180,18 @@ class VoiceManager @Inject constructor(
                 when (error) {
                     SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
                     {
-                        Log.d("VoiceManager", "Network error, falling back to System default routing.")
-                        useOfflineMode = false
+                        // Network error during online recognition — this is expected when offline.
+                        // DO NOT disable offline mode. Just restart mic.
+                        Log.d("VoiceManager", "Network error on SpeechRecognizer (expected in offline). Restarting.")
                         scope.launch { delay(1000); startListening() }
                     }
                     SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
-                        // Offline pack not working; fall back to online
-                        useOfflineMode = false
                         scope.launch { delay(1000); startListening() }
                     }
                     VoiceSetupHelper.ERROR_OFFLINE_PACK_MISSING -> {
-                        // Offline pack not installed — notify admin
+                        // Offline pack not installed — notify admin, but keep trying
                         voiceSetupHelper.onOfflineSttPackMissing()
                         Log.w("VoiceManager", "Offline STT missing — admin needs to install offline language pack")
-                        useOfflineMode = false
                         scope.launch { delay(1000); startListening() }
                     }
                     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
@@ -213,20 +223,34 @@ class VoiceManager @Inject constructor(
                 _isListening.value = false
 
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                val text = matches?.firstOrNull() ?: ""
-                Log.d("VoiceManager", "SpeechRecognizer result: '$text'")
+                // Try ALL candidates — pick the first one that generates a known intent
+                val allTexts = matches ?: arrayListOf()
+                val text = allTexts.firstOrNull() ?: ""
+                Log.d("VoiceManager", "SpeechRecognizer candidates: $allTexts")
 
                 if (text.isNotBlank()) {
                     _recognizedText.value = text
                     addChatMessage(ChatMessage(isUser = true, text = text))
-                    handleRecognizedSpeech(text)
-                    resetIdleTimer() // Reset idle countdown when user actually speaks
+                    
+                    // Try each candidate in order until we find a non-UNKNOWN intent
+                    var handled = false
+                    for (candidate in allTexts) {
+                        val normalized = normalizePhonetics(candidate)
+                        val intent = intentParser.parseIntent(normalized, _currentLocale.value.language)
+                        if (intent != AppIntent.UNKNOWN) {
+                            handleRecognizedSpeech(candidate)
+                            handled = true
+                            break
+                        }
+                    }
+                    if (!handled) handleRecognizedSpeech(text) // Fall back to first result
+                    resetIdleTimer()
                 }
 
                 // Auto-restart for continuous listening
                 // Delay must be long enough for Android to release the audio focus
                 scope.launch {
-                    delay(800)
+                    delay(50) // Reduced from 800ms to eliminate continuous listening lag
                     if (!_isListening.value && !_isVoiceIdle.value) {
                         startListening()
                     }
@@ -258,15 +282,15 @@ class VoiceManager @Inject constructor(
             }
 
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                // Use command-optimised language model (better for short words like "tare", "next", "stop")
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, _currentLocale.value.toString())
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-                // Silence detection tuning — makes recognition end faster
-                putExtra("android.speech.extra.DICTATION_MODE", false)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1000L)
-                // Only request offline if a pack is actually known to be available
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5) // Get top-5 candidates to find best intent match
+                // Fast silence detection (was 1500/1000, cut to 700/500 for snappier response)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 700L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 500L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 200L)
                 if (useOfflineMode) {
                     putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                 }
@@ -296,10 +320,12 @@ class VoiceManager @Inject constructor(
     }
 
     private fun handleRecognizedSpeech(text: String) {
-        val parsedIntent = intentParser.parseIntent(text, _currentLocale.value.language)
+        // Normalize phonetic mismatches before parsing intent.
+        val normalizedText = normalizePhonetics(text)
+        val parsedIntent = intentParser.parseIntent(normalizedText, _currentLocale.value.language)
 
         if (parsedIntent != AppIntent.UNKNOWN) {
-            Log.d("VoiceManager", "Parsed Intent: $parsedIntent for text: '$text'")
+            Log.d("VoiceManager", "Parsed Intent: $parsedIntent for text: '$normalizedText' (raw: '$text')")
             
             // Intercept Language Switching Intents immediately (Global action)
             when (parsedIntent) {
@@ -319,11 +345,10 @@ class VoiceManager @Inject constructor(
                     return // Do not pass to the UI
                 }
                 else -> {
-                    // Normal UI Intents
+                    // Normal UI Intents — emit and auto-clear after short window
                     _currentIntent.value = parsedIntent
-
                     scope.launch {
-                        delay(1500)
+                        delay(600) // Was 1500ms, reduced for faster sequential commands
                         _currentIntent.value = null
                     }
                 }
@@ -440,13 +465,58 @@ class VoiceManager @Inject constructor(
         }
         
         // If the microphone is active, restart it so the new intent EXTRA_LANGUAGE is applied
-        if (_isListening.value) {
+        if (_isListening.value || isRecognizerBusy) {
             stopListening()
             scope.launch { 
-                delay(300) 
+                delay(100)  // Reduced delay for faster switch
                 startListening() 
             }
         }
+    }
+
+    /**
+     * Normalizes phonetic mismatches from speech recognition.
+     * Android STT often mishears domain-specific words due to insufficient context.
+     * This function maps known confusables to their intended command words.
+     */
+    private fun normalizePhonetics(text: String): String {
+        var s = text.lowercase().trim()
+        
+        // ─── Tare (Scale zeroing) ─────────────────────────────────────────────
+        // "tare" is a domain-specific word often confused with common English words
+        val tareConfusables = listOf(
+            "tyre", "tire", "tear", "pare", "pear", "bare", "dare", "fare", "hare",
+            "lair", "mare", "rare", "wear", "care", "air", "their", "there",
+            "tier", "beer", "dear", "fear", "here", "hear", "gear", "near", "year",
+            "tea", "tar", "tar scale", "take", "tale", "table re", "clear"
+        )
+        // Only remap if it's a standalone confusable (not part of a bigger command)
+        if (tareConfusables.any { s == it || s.startsWith("$it ") || s.endsWith(" $it") }) {
+            s = s.replace(Regex("\\b(${tareConfusables.joinToString("|")})\\b"), "tare")
+        }
+
+        // ─── Dispense confusables ─────────────────────────────────────────────
+        val dispenseConfusables = listOf("this pants", "this pence", "despense", "dispens", "disperse", "disburse")
+        dispenseConfusables.forEach { s = s.replace(it, "dispense") }
+
+        // ─── Resume confusables ───────────────────────────────────────────────
+        val resumeConfusables = listOf("results", "resumes", "re zoom", "result", "presume")
+        resumeConfusables.forEach { s = s.replace(it, "resume") }
+
+        // ─── Pause confusables ────────────────────────────────────────────────
+        val pauseConfusables = listOf("paws", "cause", "laws", "boss", "pos", "pose", "poz")
+        pauseConfusables.forEach { c -> if (s == c) s = s.replace(c, "pause") }
+
+        // ─── Admin confusables ────────────────────────────────────────────────
+        val adminConfusables = listOf("add men", "ad min", "atmin", "ad main")
+        adminConfusables.forEach { s = s.replace(it, "admin") }
+        
+        // ─── Log the normalization if it changed anything ─────────────────────
+        if (s != text.lowercase().trim()) {
+            Log.d("VoiceManager", "Phonetic normalization: '$text' -> '$s'")
+        }
+        
+        return s
     }
 
     fun shutdown() {

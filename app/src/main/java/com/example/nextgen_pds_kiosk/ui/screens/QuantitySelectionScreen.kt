@@ -8,7 +8,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiOff
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,22 +27,45 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.nextgen_pds_kiosk.R
 import com.example.nextgen_pds_kiosk.ui.components.KioskPrimaryButton
 import com.example.nextgen_pds_kiosk.ui.components.KioskTopAppBar
+import com.example.nextgen_pds_kiosk.ui.components.VisionCameraPreview
 import com.example.nextgen_pds_kiosk.ui.components.VoiceDebugDialog
 import com.example.nextgen_pds_kiosk.voice.AppIntent
+import com.example.nextgen_pds_kiosk.viewmodel.ConnectionState
 import com.example.nextgen_pds_kiosk.viewmodel.DispenserState
 import com.example.nextgen_pds_kiosk.viewmodel.DispenserViewModel
+import com.example.nextgen_pds_kiosk.vision.VisionState
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
 import kotlin.math.roundToInt
 
+@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun QuantitySelectionScreen(
+    viewModel: DispenserViewModel = hiltViewModel(),
     onNavigateNext: () -> Unit,
     onNavigateBack: () -> Unit,
-    viewModel: DispenserViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val connectionState by viewModel.connectionState.collectAsState()
+    val currentWeightKg by viewModel.currentWeightKg.collectAsState()
     var quantityKg by remember { mutableIntStateOf(5) }
     val maxQuota = 15 // Max allowed per month
     val commodityName = "Wheat"
+
+    // Safety Vision State
+    var visionState by remember { mutableStateOf(VisionState.IDLE) }
+
+    // Camera Permission for Vision
+    val cameraPermissionState = rememberPermissionState(
+        permission = android.Manifest.permission.CAMERA
+    )
+
+    LaunchedEffect(Unit) {
+        if (!cameraPermissionState.status.isGranted) {
+            cameraPermissionState.launchPermissionRequest()
+        }
+    }
 
     // Auto-Tare the scale as soon as we land on this screen
     LaunchedEffect(Unit) {
@@ -62,8 +89,9 @@ fun QuantitySelectionScreen(
     // Listen for Voice Intents
     LaunchedEffect(currentIntent) {
         when (currentIntent) {
-            AppIntent.NAVIGATE_BACK -> onNavigateBack()
-            AppIntent.START_DISPENSING -> onNavigateNext()
+            AppIntent.NAVIGATE_BACK     -> onNavigateBack()
+            AppIntent.START_DISPENSING  -> onNavigateNext()
+            AppIntent.TARE_SCALE        -> viewModel.tareScale()
             AppIntent.INCREASE_QUANTITY -> {
                 if (quantityKg < maxQuota) quantityKg += 1
             }
@@ -102,7 +130,35 @@ fun QuantitySelectionScreen(
             onNavigateBack = onNavigateBack
         )
 
-        Spacer(modifier = Modifier.height(48.dp))
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ── Hardware Connection Status ──
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val (icon, color, text) = when (connectionState) {
+                is ConnectionState.Online -> Triple(Icons.Default.Wifi, com.example.nextgen_pds_kiosk.ui.theme.SuccessGreen, "Hardware Online")
+                is ConnectionState.Offline -> Triple(Icons.Default.WifiOff, MaterialTheme.colorScheme.error, "Hardware Offline")
+                is ConnectionState.Checking -> Triple(Icons.Default.Wifi, MaterialTheme.colorScheme.onSurfaceVariant, "Connecting...")
+            }
+            Icon(imageVector = icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(text = text, style = MaterialTheme.typography.bodyMedium, color = color, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.width(16.dp))
+            OutlinedButton(
+                onClick = { viewModel.checkConnectionNow() },
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                modifier = Modifier.height(32.dp)
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = "Refresh", modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Refresh", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
 
         Text(
             text = "Select Quantity",
@@ -142,6 +198,50 @@ fun QuantitySelectionScreen(
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.align(Alignment.Center)
             )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ── Live Scale & Tare Button ────────────────────────────────────────────
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha=0.5f)),
+            modifier = Modifier.fillMaxWidth(0.8f)
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Live Scale Weight",
+                        style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    )
+                    Text(
+                        text = String.format("%.3f kg", currentWeightKg),
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    )
+                }
+                OutlinedButton(
+                    onClick = { viewModel.tareScale() },
+                    enabled = uiState !is DispenserState.Taring,
+                    modifier = Modifier.height(52.dp),
+                    shape = RoundedCornerShape(26.dp)
+                ) {
+                    if (uiState is DispenserState.Taring) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Text(
+                        text = if (uiState is DispenserState.Taring) "ZEROING..." else "TARE SCALE", 
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -252,23 +352,96 @@ fun QuantitySelectionScreen(
 
         Spacer(modifier = Modifier.weight(1f))
 
-        // Warning Text (Bag verification prompt)
-        Text(
-            text = "Please ensure your bag is securely placed under the dispenser nozzle before proceeding.",
-            style = MaterialTheme.typography.bodyLarge.copy(
-                color = com.example.nextgen_pds_kiosk.ui.theme.WarningYellow
-            ),
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(horizontal = 32.dp)
-        )
+        // Advanced Safety Vision Verification Camera Box
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 32.dp)
+                .height(260.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            if (cameraPermissionState.status.isGranted) {
+                VisionCameraPreview(
+                    modifier = Modifier.fillMaxSize(),
+                    onVisionStateChanged = { newState ->
+                        visionState = newState
+                    }
+                )
+                
+                // Overlay Status Text
+                val statusText = when (visionState) {
+                    VisionState.HANDS_DETECTED -> "DANGER: Hands Detected! Keep away from nozzle."
+                    VisionState.NO_BAG -> "Place your bag properly under nozzle."
+                    VisionState.BAG_DETECTED -> "Bag Detected - Safe to Dispense!"
+                    VisionState.IDLE -> "Analyzing Dispenser Area..."
+                }
+                
+                val statusColor = when (visionState) {
+                    VisionState.HANDS_DETECTED -> Color.Red
+                    VisionState.NO_BAG -> com.example.nextgen_pds_kiosk.ui.theme.WarningYellow
+                    VisionState.BAG_DETECTED -> com.example.nextgen_pds_kiosk.ui.theme.SuccessGreen
+                    VisionState.IDLE -> Color.White
+                }
+                
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(statusColor.copy(alpha = 0.8f))
+                        .padding(8.dp),
+                    textAlign = TextAlign.Center
+                )
+            } else {
+                Text(
+                    "Camera Permission Required for Safety Verification",
+                    color = Color.White
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        KioskPrimaryButton(
-            text = "START DISPENSING",
-            icon = Icons.Default.ShoppingCart,
-            onClick = onNavigateNext
-        )
+        // Start button is ONLY enabled if a bag is detected and NO hands are present
+        val isSafeToDispense = visionState == VisionState.BAG_DETECTED
+
+        Button(
+            onClick = {
+                if (isSafeToDispense) {
+                    viewModel.startDispensing(quantityKg.toFloat())
+                    onNavigateNext()
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 32.dp)
+                .height(80.dp),
+            enabled = isSafeToDispense,
+            shape = RoundedCornerShape(40.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = com.example.nextgen_pds_kiosk.ui.theme.PrimaryAccent,
+                disabledContainerColor = Color.LightGray
+            )
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.ShoppingCart,
+                    contentDescription = null,
+                    modifier = Modifier.size(32.dp),
+                    tint = if (isSafeToDispense) Color.White else Color.Gray
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Text(
+                    text = "START DISPENSING",
+                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                    color = if (isSafeToDispense) Color.White else Color.DarkGray
+                )
+            }
+        }
     }
 
         // Voice Debug Dialog Trigger FAB

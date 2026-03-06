@@ -47,10 +47,12 @@ android {
     packaging {
         jniLibs {
             // Required for 16KB page size support on Android 15+ devices.
-            // AGP 8.3+ automatically aligns uncompressed .so files to 16KB boundaries.
+            // AGP 8.3+ automatically aligns uncompressed .so files to 16KB boundaries
+            // when useLegacyPackaging is false.
             useLegacyPackaging = false
             // Resolve native library conflicts between LiteRT and TFLite
             pickFirsts.add("**/libtensorflowlite_jni.so")
+            pickFirsts.add("**/libimage_processing_util_jni.so")
         }
     }
 }
@@ -92,17 +94,24 @@ dependencies {
 
     // CameraX + Permissions
     val cameraxVersion = "1.3.3"
+    implementation("androidx.camera:camera-core:$cameraxVersion")
     implementation("androidx.camera:camera-camera2:$cameraxVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
     implementation("com.google.accompanist:accompanist-permissions:0.34.0")
 
-    // ML Kit + LiteRT (formerly TFLite) - Using LiteRT for 16KB support and resolving Duplicate Class errors
+    // ML Kit + LiteRT (formerly TFLite)
     implementation("com.google.mlkit:face-detection:16.1.7")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
-    implementation("com.google.ai.edge.litert:litert:1.0.1")
+    implementation("com.google.ai.edge.litert:litert:1.2.0")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
+
+    // MediaPipe for Hand Detection
+    implementation("com.google.mediapipe:tasks-vision:0.10.14")
+    
+    // PyTorch Mobile for Bag Detection
+    implementation("org.pytorch:pytorch_android:1.13.0")
+    implementation("org.pytorch:pytorch_android_torchvision:1.13.0")
 
     // Room Database
     val roomVersion = "2.6.1"

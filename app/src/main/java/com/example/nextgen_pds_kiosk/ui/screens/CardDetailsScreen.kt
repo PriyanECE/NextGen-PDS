@@ -32,6 +32,7 @@ import com.example.nextgen_pds_kiosk.data.model.FamilyMember
 import com.example.nextgen_pds_kiosk.ui.components.KioskPrimaryButton
 import com.example.nextgen_pds_kiosk.ui.components.KioskTopAppBar
 import com.example.nextgen_pds_kiosk.ui.theme.*
+import com.example.nextgen_pds_kiosk.voice.AppIntent
 import com.example.nextgen_pds_kiosk.viewmodel.AuthState
 import com.example.nextgen_pds_kiosk.viewmodel.AuthViewModel
 import com.google.gson.Gson
@@ -49,6 +50,19 @@ fun CardDetailsScreen(
 
     LaunchedEffect(cardNo) {
         viewModel.loadBeneficiary(cardNo)
+    }
+
+    // Voice assistant integration
+    val currentIntent by viewModel.voiceManager.currentIntent.collectAsState()
+    LaunchedEffect(currentIntent) {
+        when (currentIntent) {
+            AppIntent.NAVIGATE_BACK -> onNavigateBack()
+            else -> {}
+        }
+    }
+    DisposableEffect(Unit) {
+        viewModel.voiceManager.startListening()
+        onDispose { viewModel.voiceManager.stopListening() }
     }
 
     Column(

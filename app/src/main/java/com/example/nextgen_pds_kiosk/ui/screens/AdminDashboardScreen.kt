@@ -42,7 +42,8 @@ enum class AdminTab(val title: String) {
     OVERVIEW("Overview & Analytics"),
     USERS("Beneficiary CRM"),
     INVENTORY("Inventory Levels"),
-    LOGS("Transaction Ledger")
+    LOGS("Transaction Ledger"),
+    SETTINGS("System Settings")
 }
 
 @Composable
@@ -136,6 +137,7 @@ fun AdminDashboardScreen(
                 AdminTab.USERS -> UsersTab(beneficiaries, onNavigateEnrollment, viewModel::deleteBeneficiary)
                 AdminTab.INVENTORY -> InventoryTab(inventoryLogs)
                 AdminTab.LOGS -> LogsTab(transactions)
+                AdminTab.SETTINGS -> SettingsTab()
             }
         }
     }
@@ -369,6 +371,60 @@ fun DatabaseRow(user: Beneficiary, onDelete: () -> Unit = {}) {
         
         IconButton(onClick = onDelete) {
             Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFFE57373))
+        }
+    }
+}
+
+@Composable
+fun SettingsTab() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val sharedPrefs = remember { context.getSharedPreferences("kiosk_settings", android.content.Context.MODE_PRIVATE) }
+    
+    // Default fallback is the Android Hotspot DHCP range baseline
+    var currentIp by remember { mutableStateOf(sharedPrefs.getString("esp8266_ip", "http://192.168.43.100/") ?: "http://192.168.43.100/") }
+    var ipInput by remember { mutableStateOf(currentIp) }
+    var saveStatus by remember { mutableStateOf("") }
+
+    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+        Text("Hardware Network Configuration", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            "Enter the IP Address assigned to the ESP8266 by your Mobile Hotspot.\n" +
+            "The port should end with a trailing slash (e.g., http://192.168.106.50/).", 
+            color = Color.Gray, fontSize = 14.sp
+        )
+        
+        Spacer(modifier = Modifier.height(24.dp))
+
+        OutlinedTextField(
+            value = ipInput,
+            onValueChange = { ipInput = it },
+            label = { Text("ESP8266 Base URL") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(0.6f)
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = {
+                val formattedIp = if (!ipInput.endsWith("/")) "$ipInput/" else ipInput
+                val validIp = if (!formattedIp.startsWith("http")) "http://$formattedIp" else formattedIp
+                
+                sharedPrefs.edit().putString("esp8266_ip", validIp).apply()
+                currentIp = validIp
+                ipInput = validIp
+                saveStatus = "Saved: $validIp (Restart app to apply)"
+            },
+            modifier = Modifier.height(48.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4DB6AC))
+        ) {
+            Text("Save Configuration")
+        }
+
+        if (saveStatus.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(saveStatus, color = Color.Yellow, fontWeight = FontWeight.Bold)
         }
     }
 }

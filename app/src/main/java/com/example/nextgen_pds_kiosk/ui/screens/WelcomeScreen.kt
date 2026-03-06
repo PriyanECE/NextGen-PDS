@@ -91,6 +91,7 @@ fun WelcomeScreen(
     LaunchedEffect(currentIntent) {
         when (currentIntent) {
             AppIntent.NAVIGATE_NEXT -> onNavigateNext()
+            AppIntent.OPEN_ADMIN   -> onNavigateAdmin()
             else -> {}
         }
     }

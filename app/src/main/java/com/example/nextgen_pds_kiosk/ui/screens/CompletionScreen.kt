@@ -11,6 +11,10 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -20,16 +24,43 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.nextgen_pds_kiosk.ui.theme.*
+import com.example.nextgen_pds_kiosk.voice.AppIntent
+import com.example.nextgen_pds_kiosk.viewmodel.DispenserViewModel
 import java.text.SimpleDateFormat
 import java.util.*
 
 @Composable
-fun CompletionScreen(onGoHome: () -> Unit) {
+fun CompletionScreen(
+    onGoHome: () -> Unit,
+    viewModel: DispenserViewModel = hiltViewModel()
+) {
     val timeStamp = SimpleDateFormat("dd MMM yyyy, HH:mm:ss", Locale.getDefault()).format(Date())
     val dispensedAmount = "5.0 kg"
     val commodity = "Wheat"
     val transactionId = "TXN-8492-ABCD"
+
+    // Voice assistant lifecycle
+    val currentIntent by viewModel.voiceManager.currentIntent.collectAsState()
+    DisposableEffect(Unit) {
+        viewModel.voiceManager.startListening()
+        onDispose { viewModel.voiceManager.stopListening() }
+    }
+
+    // Handle voice navigation
+    LaunchedEffect(currentIntent) {
+        when (currentIntent) {
+            AppIntent.HOME, AppIntent.NAVIGATE_NEXT -> onGoHome()
+            else -> {}
+        }
+    }
+
+    // Reset dispenser state for next customer
+    LaunchedEffect(Unit) {
+        viewModel.resetState()
+        viewModel.voiceManager.speak("Dispensing complete. Please collect your items. Say Home to return to the main screen.")
+    }
 
     Box(
         modifier = Modifier

@@ -26,6 +26,7 @@ import com.example.nextgen_pds_kiosk.ui.components.CameraPreview
 import com.example.nextgen_pds_kiosk.ui.components.KioskPrimaryButton
 import com.example.nextgen_pds_kiosk.ui.components.KioskTopAppBar
 import com.example.nextgen_pds_kiosk.ui.theme.*
+import com.example.nextgen_pds_kiosk.voice.AppIntent
 import com.example.nextgen_pds_kiosk.viewmodel.FaceVerifyState
 import com.example.nextgen_pds_kiosk.viewmodel.FaceVerifyViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
@@ -74,6 +75,15 @@ fun FaceVerifyScreen(
         onDispose {
             faceRecognizer.close()
             viewModel.onLeavingScreen()
+        }
+    }
+
+    // Voice intent handler — allow back navigation via voice
+    val currentIntent by viewModel.voiceManager.currentIntent.collectAsState()
+    LaunchedEffect(currentIntent) {
+        when (currentIntent) {
+            AppIntent.NAVIGATE_BACK -> onNavigateBack()
+            else -> {}
         }
     }
 
